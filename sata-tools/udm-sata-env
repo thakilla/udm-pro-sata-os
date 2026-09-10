@@ -1,0 +1,180 @@
+#!/usr/bin/python3
+"""Read/write Alpine U-Boot redundant env on mtd1/mtd2 (UDM Pro).
+
+Redundant header: CRC32 (LE, payload only) + 1-byte flags + key=value\\0...
+CONFIG_ENV_SIZE is 0x4000; the MTD partition is 0x10000.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import struct
+import subprocess
+import sys
+import zlib
+
+ENV_SIZE = 0x4000
+MTD_SIZE = 0x10000
+ERASE = 0x1000
+MTDS = ("/dev/mtd1", "/dev/mtd2")
+
+BOOTCMD = (
+    "scsi init; ext4load scsi 0:1 ${loadaddr} /uImage; "
+    "bootm ${loadaddr}#udmpro@${fit_index}"
+)
+BOOTARGS = (
+    "pci=pcie_bus_perf console=ttyS0,115200 panic=3 reboot=cold "
+    "systemd.mask=usd.service systemd.mask=usdbd.service"
+)
+BOOTDELAY = "5"
+
+
+def _read_mtd(path: str) -> bytes:
+    with open(path, "rb") as f:
+        blob = f.read(MTD_SIZE)
+    if len(blob) < ENV_SIZE:
+        raise SystemExit(f"{path}: short read ({len(blob)} bytes)")
+    return blob
+
+
+def _parse(blob: bytes) -> tuple[int, dict[str, str]] | None:
+    if len(blob) < ENV_SIZE:
+        return None
+    crc_stored = struct.unpack_from("<I", blob, 0)[0]
+    flags = blob[4]
+    payload = blob[5:ENV_SIZE]
+    crc = zlib.crc32(payload) & 0xFFFFFFFF
+    if crc != crc_stored:
+        return None
+    kv: dict[str, str] = {}
+    data = payload.split(b"\x00\x00", 1)[0]
+    for part in data.split(b"\x00"):
+        if not part or b"=" not in part:
+            continue
+        k, v = part.split(b"=", 1)
+        kv[k.decode("latin1")] = v.decode("latin1")
+    return flags, kv
+
+
+def _pack(flags: int, kv: dict[str, str]) -> bytes:
+    items = [f"{k}={v}".encode("latin1") for k, v in kv.items()]
+    payload = b"\x00".join(items) + b"\x00\x00"
+    if len(payload) > ENV_SIZE - 5:
+        raise SystemExit("env payload too large")
+    payload = payload.ljust(ENV_SIZE - 5, b"\x00")
+    crc = zlib.crc32(payload) & 0xFFFFFFFF
+    env = struct.pack("<I", crc) + bytes([flags]) + payload
+    return env.ljust(MTD_SIZE, b"\xff")
+
+
+def parse_all() -> list[tuple[str, tuple[int, dict[str, str]] | None]]:
+    return [(path, _parse(_read_mtd(path))) for path in MTDS]
+
+
+def load_active() -> tuple[int, dict[str, str], str]:
+    best = None
+    for path, parsed in parse_all():
+        if not parsed:
+            continue
+        flags, kv = parsed
+        if best is None or flags >= best[0]:
+            best = (flags, kv, path)
+    if best is None:
+        raise SystemExit("no valid U-Boot env on mtd1/mtd2")
+    return best
+
+
+def _flash_one(path: str, tmp: str) -> None:
+    nblocks = MTD_SIZE // ERASE
+    subprocess.check_call(["flash_erase", path, "0", str(nblocks)])
+    subprocess.check_call(["flashcp", tmp, path])
+    parsed = _parse(_read_mtd(path))
+    if not parsed or not is_scsi(parsed[1]):
+        raise SystemExit(f"{path}: write verify failed")
+
+
+def write_env(kv: dict[str, str], flags: int) -> None:
+    blob = _pack(flags, kv)
+    tmp = "/tmp/udm-sata-env.bin"
+    with open(tmp, "wb") as f:
+        f.write(blob)
+    copies = parse_all()
+    invalid = [p for p, parsed in copies if not parsed or not is_scsi(parsed[1])]
+    valid = [p for p, parsed in copies if parsed and is_scsi(parsed[1])]
+    order = invalid + [p for p in valid if p not in invalid]
+    if not order:
+        order = list(MTDS)
+    try:
+        for path in order:
+            _flash_one(path, tmp)
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    flags2, kv2, src = load_active()
+    if not is_scsi(kv2):
+        raise SystemExit(f"env write verification failed (active {src})")
+    print(f"wrote scsi env flags={flags2} active={src}")
+
+
+def ensure_scsi(kv: dict[str, str]) -> dict[str, str]:
+    out = dict(kv)
+    out["bootcmd"] = BOOTCMD
+    out["bootargs"] = BOOTARGS
+    out["bootdelay"] = BOOTDELAY
+    return out
+
+
+def is_scsi(kv: dict[str, str]) -> bool:
+    cmd = kv.get("bootcmd", "")
+    return "scsi init" in cmd and "ext4load scsi" in cmd
+
+
+def copies_need_restore() -> bool:
+    seen = 0
+    for _path, parsed in parse_all():
+        if not parsed:
+            return True
+        seen += 1
+        if not is_scsi(parsed[1]):
+            return True
+    return seen < 2
+
+
+def next_flags(flags: int) -> int:
+    return (flags + 1) & 0xFF or 1
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(description="UDM Pro SATA U-Boot env helper")
+    p.add_argument("action", choices=("show", "check", "restore"))
+    args = p.parse_args()
+    flags, kv, src = load_active()
+    if args.action == "show":
+        print(f"# active flags={flags} from {src}")
+        for k in ("bootcmd", "bootargs", "bootdelay", "loadaddr", "fit_index"):
+            if k in kv:
+                print(f"{k}={kv[k]}")
+        for path, parsed in parse_all():
+            if not parsed:
+                print(f"# {path}: INVALID")
+                continue
+            f, env = parsed
+            state = "scsi" if is_scsi(env) else "not-scsi"
+            print(f"# {path}: flags={f} {state}")
+        return 0
+    if args.action == "check":
+        ok = is_scsi(kv) and not copies_need_restore()
+        print("scsi" if ok else "not-scsi")
+        return 0 if ok else 1
+    if not copies_need_restore() and is_scsi(kv) and kv.get("bootargs") == BOOTARGS:
+        print("bootcmd already scsi on mtd1+mtd2; no write")
+        return 0
+    write_env(ensure_scsi(kv), next_flags(flags))
+    print("restored scsi bootcmd to mtd1+mtd2")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,14 @@
+[Unit]
+Description=UDM SATA boot guard (hide dead eMMC, keep SCSI env, mask usd)
+DefaultDependencies=no
+Before=local-fs-pre.target usd.service usdbd.service
+After=systemd-udevd.service
+ConditionPathExists=/dev/sda
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/udm-sata-guard
+
+[Install]
+WantedBy=sysinit.target

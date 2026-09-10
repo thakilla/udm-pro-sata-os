@@ -1,0 +1,3 @@
+#!/bin/sh
+# systemd-shutdown hook: restore SCSI bootcmd even if fwupdate reboots us.
+exec /usr/local/sbin/udm-sata-env restore >/dev/null 2>&1

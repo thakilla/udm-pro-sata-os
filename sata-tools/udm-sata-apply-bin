@@ -1,0 +1,152 @@
+#!/usr/bin/python3
+"""Apply an official UDMPRO-*.bin onto the SATA GPT layout.
+
+Ubiquiti fwupdate writes the dead USB eMMC (/dev/sdb2). This extracts the FIT
+uImage onto sda1 and the squashfs onto sda3:/rootfs instead.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+from ubnt_bin import inspect  # noqa: E402
+
+FIT_MAGIC = bytes.fromhex("d00dfeed")
+SQ_MAGIC = b"hsqs"
+
+
+def copy_range(src: Path, dst: Path, offset: int, size: int, magic: bytes) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    with src.open("rb") as inf, dst.open("wb") as outf:
+        inf.seek(offset)
+        head = inf.read(len(magic))
+        if head != magic:
+            raise SystemExit(f"{dst}: bad magic at {offset}: {head!r}")
+        outf.write(head)
+        left = size - len(magic)
+        while left:
+            chunk = inf.read(min(left, 8 * 1024 * 1024))
+            if not chunk:
+                raise SystemExit(f"{dst}: short read, {left} bytes missing")
+            outf.write(chunk)
+            left -= len(chunk)
+    if dst.stat().st_size != size:
+        raise SystemExit(f"{dst}: size {dst.stat().st_size} != {size}")
+    # Loop devices only expose whole 4KiB sectors; unpadded squashfs → EINVAL.
+    aligned = (size + 4095) & ~4095
+    if aligned > size:
+        with dst.open("ab") as outf:
+            outf.write(b"\x00" * (aligned - size))
+    print(f"wrote {dst} ({size} bytes, padded to {aligned})")
+
+
+def run(cmd: list[str]) -> None:
+    print("+", " ".join(cmd))
+    subprocess.check_call(cmd)
+
+
+def wipe_overlay() -> None:
+    upper = Path("/mnt/.rwfs/data")
+    if not upper.is_dir():
+        print("overlay upper not mounted; skip wipe")
+        return
+    for child in upper.iterdir():
+        if child.name == "lost+found":
+            continue
+        print("rm", child)
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child, ignore_errors=True)
+        else:
+            try:
+                child.unlink()
+            except OSError:
+                pass
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(description="Write UDMPRO firmware onto SATA OS partitions")
+    p.add_argument("firmware", help="official UDMPRO-*.bin")
+    p.add_argument("--keep-overlay", action="store_true", help="do not wipe overlay (same-major patches)")
+    p.add_argument("--no-reboot", action="store_true")
+    args = p.parse_args()
+    if os.geteuid() != 0:
+        raise SystemExit("run as root on the UDM")
+
+    binpath = Path(args.firmware)
+    if not binpath.is_file():
+        raise SystemExit(f"missing firmware: {binpath}")
+
+    fit_off, fit_size, sq_off, sq_size = inspect(binpath)
+    print(f"FIT @ {fit_off} ({fit_size} bytes)")
+    print(f"squashfs @ {sq_off} ({sq_size} bytes)")
+
+    boot_mnt = Path("/mnt/udm-sda1")
+    root_mnt = Path("/boot/firmware")
+    boot_mnt.mkdir(parents=True, exist_ok=True)
+    run(["mount", "-o", "rw", "/dev/sda1", str(boot_mnt)])
+    if not root_mnt.is_dir():
+        root_mnt = Path("/mnt/udm-sda3")
+        root_mnt.mkdir(parents=True, exist_ok=True)
+        run(["mount", "-o", "rw", "/dev/sda3", str(root_mnt)])
+    else:
+        run(["mount", "-o", "remount,rw", str(root_mnt)])
+
+    uimage_new = boot_mnt / "uImage.new"
+    rootfs_new = root_mnt / "rootfs.new"
+    umount_boot = True
+    try:
+        print("== extract FIT uImage")
+        copy_range(binpath, uimage_new, fit_off, fit_size, FIT_MAGIC)
+        print("== extract squashfs rootfs")
+        copy_range(binpath, rootfs_new, sq_off, sq_size, SQ_MAGIC)
+        os.replace(uimage_new, boot_mnt / "uImage")
+        os.replace(rootfs_new, root_mnt / "rootfs")
+        run(["sync"])
+        print("boot uImage", (boot_mnt / "uImage").stat().st_size)
+        print("root rootfs", (root_mnt / "rootfs").stat().st_size)
+    finally:
+        if umount_boot:
+            subprocess.call(["umount", str(boot_mnt)])
+
+    backup_etc = Path("/persistent/udm-sata/pre-update-etc")
+    backup_etc.mkdir(parents=True, exist_ok=True)
+    for sp in ("/etc/shadow", "/etc/ssh"):
+        if os.path.exists(sp):
+            dst = backup_etc / Path(sp).name
+            if dst.exists():
+                shutil.rmtree(dst) if dst.is_dir() else dst.unlink()
+            if os.path.isdir(sp):
+                shutil.copytree(sp, dst)
+            else:
+                shutil.copy2(sp, dst)
+
+    env = Path("/usr/local/sbin/udm-sata-env")
+    if not env.is_file():
+        env = Path("/persistent/udm-sata/bin/udm-sata-env")
+    if os.access(env, os.X_OK):
+        subprocess.call([str(env), "restore"])
+        subprocess.call([str(env), "show"])
+
+    if args.keep_overlay:
+        print("== keep overlay")
+    else:
+        print("== wipe overlay upper")
+        wipe_overlay()
+    run(["sync"])
+    if args.no_reboot:
+        print("done; reboot yourself")
+        return 0
+    print("== rebooting")
+    os.execv("/sbin/reboot", ["reboot", "-f"])
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

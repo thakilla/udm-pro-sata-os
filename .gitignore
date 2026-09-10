@@ -1,0 +1,13 @@
+.DS_Store
+*.bin
+*.img
+*.IMG
+*.raw
+*.dump
+*.pyc
+__pycache__/
+.idea/
+.vscode/
+*.swp
+.env
+*.log

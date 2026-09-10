@@ -1,0 +1,8 @@
+#!/bin/sh
+# Ubiquiti bootup/upgrade hook: re-apply SATA guard after overlay/firmware changes.
+if [ -x /persistent/udm-sata/bin/udm-sata-guard ]; then
+    /persistent/udm-sata/bin/udm-sata-guard || true
+elif [ -x /usr/local/sbin/udm-sata-guard ]; then
+    /usr/local/sbin/udm-sata-guard || true
+fi
+exit 0

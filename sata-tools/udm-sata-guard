@@ -1,0 +1,91 @@
+#!/bin/sh
+# Early-boot: keep OS on SATA, hide dead USB eMMC, keep Protect off the HDD.
+set -eu
+
+LOG=/var/log/udm-sata-guard.log
+log() { echo "$(date -u +%FT%TZ) $*" >>"$LOG" 2>/dev/null || true; }
+
+BIN=/persistent/udm-sata/bin
+ENV=""
+if [ -x /usr/local/sbin/udm-sata-env ]; then
+    ENV=/usr/local/sbin/udm-sata-env
+elif [ -x "$BIN/udm-sata-env" ]; then
+    ENV="$BIN/udm-sata-env"
+fi
+
+mask_usd() {
+    mkdir -p /etc/systemd/system
+    ln -sfn /dev/null /etc/systemd/system/usd.service
+    ln -sfn /dev/null /etc/systemd/system/usdbd.service
+}
+
+unbind_usb_boot() {
+    # Kernel names the GL3224 USB reader /dev/boot (major 135). SATA is sda.
+    if [ -e /sys/block/boot ]; then
+        sys=$(readlink -f /sys/block/boot || true)
+        case "$sys" in
+            */usb*|/sys/devices/*/usb*)
+                usbdev=$(echo "$sys" | sed -n 's#\(/sys/devices/.*/usb[0-9]*/[0-9.-]*\)/.*#\1#p')
+                if [ -n "$usbdev" ] && [ -w "$usbdev/remove" ]; then
+                    log "removing USB eMMC $usbdev"
+                    echo 1 >"$usbdev/remove" || true
+                    sleep 1
+                fi
+                ;;
+        esac
+    fi
+}
+
+alias_boot_to_sda() {
+    [ -b /dev/sda ] || return 0
+    rm -f /dev/boot
+    ln -sfn /dev/sda /dev/boot
+    i=1
+    while [ "$i" -le 6 ]; do
+        if [ -b "/dev/sda$i" ]; then
+            rm -f "/dev/boot$i"
+            ln -sfn "/dev/sda$i" "/dev/boot$i"
+        fi
+        i=$((i + 1))
+    done
+}
+
+reinstall_tools() {
+    if [ -d "$BIN" ]; then
+        mkdir -p /usr/local/sbin /etc/systemd/system /lib/systemd/system-shutdown
+        cp -a "$BIN/udm-sata-env" "$BIN/udm-sata-guard" "$BIN/udm-sata-apply-bin" \
+            /usr/local/sbin/ 2>/dev/null || true
+        cp -a "$BIN/ubnt_bin.py" /usr/local/sbin/ 2>/dev/null || true
+        chmod 755 /usr/local/sbin/udm-sata-* 2>/dev/null || true
+        if [ -f "$BIN/udm-sata-guard.service" ]; then
+            cp -a "$BIN/udm-sata-guard.service" /etc/systemd/system/ 2>/dev/null || true
+        fi
+        if [ -f "$BIN/udm-sata-restore-env" ]; then
+            cp -a "$BIN/udm-sata-restore-env" /lib/systemd/system-shutdown/ 2>/dev/null || true
+            chmod 755 /lib/systemd/system-shutdown/udm-sata-restore-env 2>/dev/null || true
+        fi
+        if [ -f "$BIN/udm-sata.hook" ]; then
+            mkdir -p /usr/lib/ubnt/hooks/system/bootup-top \
+                /usr/lib/ubnt/hooks/system/upgrade-bottom
+            cp -a "$BIN/udm-sata.hook" /usr/lib/ubnt/hooks/system/bootup-top/05-udm-sata
+            cp -a "$BIN/udm-sata.hook" /usr/lib/ubnt/hooks/system/upgrade-bottom/90-udm-sata
+            chmod 755 /usr/lib/ubnt/hooks/system/bootup-top/05-udm-sata \
+                /usr/lib/ubnt/hooks/system/upgrade-bottom/90-udm-sata
+        fi
+    fi
+}
+
+restore_env() {
+    if [ -n "$ENV" ] && [ -x "$ENV" ]; then
+        "$ENV" restore >>"$LOG" 2>&1 || true
+    fi
+}
+
+mkdir -p /var/log /persistent/udm-sata
+reinstall_tools
+mask_usd
+unbind_usb_boot
+alias_boot_to_sda
+restore_env
+log "guard done"
+exit 0
