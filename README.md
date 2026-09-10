@@ -26,7 +26,7 @@ Related hardware approach (desolder GL3224, USB stick on the internal bus):
 - A **disposable** SATA HDD/SSD fits the Protect bay (2.5″/3.5″ depending on the cage).
 - You have an official **`UDMPRO-*.bin`** (platform `al324`, not SE).
 
-The **first** conversion needs serial. Once the SCSI `bootcmd` is stored in SPI, later OS updates can be done over SSH.
+The **first** conversion needs serial. Once the SCSI `bootcmd` is stored in SPI, leave the console disconnected: later OS updates are SSH-only (`udm-sata-apply-bin`). Never the Web UI or `fwupdate`. Turn **off every automatic update under Control Plane** or the box will apply an official update and brick itself again.
 
 ---
 
@@ -35,6 +35,7 @@ The **first** conversion needs serial. Once the SCSI `bootcmd` is stored in SPI,
 | Action | Why |
 |---|---|
 | Web UI “Update” / `fwupdate` / `ubnt-systool fwupdate` | Writes the dead eMMC (`/dev/boot` or `/dev/sdb2`). |
+| Control Plane auto-updates | Same path as a manual UI update. The unit will brick itself on the next scheduled firmware. |
 | Factory reset | Restores the USB `bootcmd`. |
 | **`usb start`** in U-Boot | XHCI Event-33 crash on affected boards. |
 | Expand GPT to the full 1 TB | `usd`/Protect would consume the rest of the disk. |
@@ -255,6 +256,8 @@ This:
 
 Web UI: LAN `https://192.168.1.1`. After an overlay wipe this is a fresh setup.
 
+Immediately after the wizard: **Settings → Control Plane** and disable **all automatic updates** (UniFi OS and every application). If they stay on, the device will pull an official `.bin` and write the dead eMMC.
+
 ---
 
 ## Later firmware updates (SSH only, no serial)
@@ -268,8 +271,9 @@ Do **not** use:
 - the Web UI **Update** button
 - `fwupdate`
 - `ubnt-systool fwupdate`
+- **Control Plane** automatic updates (UniFi OS or applications)
 
-Those always write the dead USB eMMC (`/dev/boot` / `/dev/sdb2`), not SATA. The update will fail or brick the next boot.
+Those always write the dead USB eMMC (`/dev/boot` / `/dev/sdb2`), not SATA. The update will fail or brick the next boot. After every setup wizard, go to **Settings → Control Plane** and turn every auto-update **off**. Leave them on and the unit will destroy the SATA boot on its own.
 
 ```sh
 # computer: check offsets
