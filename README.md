@@ -257,9 +257,19 @@ Web UI: LAN `https://192.168.1.1`. After an overlay wipe this is a fresh setup.
 
 ---
 
-## Later firmware updates (no serial)
+## Later firmware updates (SSH only, no serial)
 
-Not the UI, not `fwupdate`.
+After the initial conversion, the serial adapter can stay unplugged. SCSI `bootcmd` lives in SPI, so every reboot loads UniFi OS from the HDD without a console.
+
+Apply later `UDMPRO-*.bin` files **over SSH** with `udm-sata-apply-bin`.
+
+Do **not** use:
+
+- the Web UI **Update** button
+- `fwupdate`
+- `ubnt-systool fwupdate`
+
+Those always write the dead USB eMMC (`/dev/boot` / `/dev/sdb2`), not SATA. The update will fail or brick the next boot.
 
 ```sh
 # computer: check offsets
