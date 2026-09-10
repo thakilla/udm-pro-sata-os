@@ -1,79 +1,79 @@
-# UniFi Dream Machine Pro: Betriebssystem auf SATA
+# UniFi Dream Machine Pro: OS on SATA
 
-Die interne eMMC hinter USB (ASM1142 + **GL3224**) kann sterben: U-Boot macht `usb start` und `ext4load usb 0`, Linux sieht `/dev/boot` mit **0 Byte**. Die Box bootet nicht mehr, SPI (U-Boot) ist aber intakt.
+The internal eMMC behind USB (ASM1142 + **GL3224**) can die: U-Boot runs `usb start` then `ext4load usb 0`, and Linux sees `/dev/boot` with **0 bytes**. The unit will not boot. SPI (U-Boot) is usually still intact.
 
-Dieses Repo beschreibt, das **UniFi OS auf die SATA-Platte im Protect-Schacht** zu legen und U-Boot dauerhaft per SCSI starten zu lassen. Danach gehen Firmware-Updates **ohne** die tote eMMC — und ohne Ubiquitis `fwupdate`, das weiterhin auf USB-Storage zielt.
+This repo moves **UniFi OS onto the SATA drive in the Protect bay** and makes U-Boot boot from SCSI permanently. After that, firmware updates no longer need the dead eMMC — and they must **not** use Ubiquiti `fwupdate`, which still targets USB storage.
 
-Getestet: **UDM Pro** (nicht SE / Pro Max / UDM), BOM rev 10, `fit_index=2`, UniFi OS 3.1.16 → 5.1.26, HDD WDC WD10EFRX 1 TB.
+Tested: **UDM Pro** (not SE / Pro Max / base UDM), BOM rev 10, `fit_index=2`, UniFi OS 3.1.16 → 5.1.26, WDC WD10EFRX 1 TB HDD.
 
-## Warnung
+## Warning
 
-- Das **voidet die Garantie**.
-- Du löschst die Protect-Platte.
-- Falscher `bootcmd` oder `usb start` in U-Boot kann die Box unbootbar machen.
-- Protect darf **nicht** auf derselben Platte laufen (`usd` zerstört die OS-GPT).
-- Keine offizielle Ubiquiti-Methode. Firmware-`.bin` gehören Ubiquiti; hier liegen nur Skripte.
+- This **voids the warranty**.
+- The Protect bay disk is wiped.
+- A wrong `bootcmd` or `usb start` in U-Boot can leave the unit unbootable.
+- Protect must **not** run on the same disk (`usd` destroys the OS GPT).
+- This is not an official Ubiquiti method. Firmware `.bin` files belong to Ubiquiti; this repo only contains scripts.
 
-Verwandter Hardware-Weg (GL3224 ablöten, USB-Stick intern):  
-[Community-Thread](https://community.ui.com/questions/1797bd03-a422-4eb6-9594-6c69ed2525a3) (Antworten mit `replyId=3471a337-…` und Fotos `51c69809-…`).
-
----
-
-## Für wen das ist
-
-- UDM Pro startet nicht mehr (USB-eMMC tot oder 0 Byte).
-- Serial-Konsole geht (115200 8N1).
-- Eine **entbehrliche** SATA-HDD/SSD passt in den Protect-Schacht (2,5″/3,5″ je nach Käfig).
-- Du hast ein offizielles **`UDMPRO-*.bin`** (gleiche Plattform `al324`, nicht SE).
-
-Die **erste** Umstellung braucht Serial. Wenn SCSI-`bootcmd` einmal in SPI steht, gehen spätere OS-Updates per SSH.
+Related hardware approach (desolder GL3224, USB stick on the internal bus):  
+[Community thread](https://community.ui.com/questions/1797bd03-a422-4eb6-9594-6c69ed2525a3) (replies `replyId=3471a337-…` and photos `51c69809-…`).
 
 ---
 
-## Was nicht tun
+## Who this is for
 
-| Aktion | Warum |
+- UDM Pro no longer boots (USB eMMC dead or 0 bytes).
+- Serial console works (115200 8N1).
+- A **disposable** SATA HDD/SSD fits the Protect bay (2.5″/3.5″ depending on the cage).
+- You have an official **`UDMPRO-*.bin`** (platform `al324`, not SE).
+
+The **first** conversion needs serial. Once the SCSI `bootcmd` is stored in SPI, later OS updates can be done over SSH.
+
+---
+
+## Do not
+
+| Action | Why |
 |---|---|
-| Web-UI „Update“ / `fwupdate` / `ubnt-systool fwupdate` | Schreibt die tote eMMC (`/dev/boot` oder `/dev/sdb2`). |
-| Factory Reset | Stellt USB-`bootcmd` wieder her. |
-| In U-Boot **`usb start`** | XHCI Event-33 Crash auf betroffenen Boards. |
-| GPT auf volle 1 TB aufblasen | `usd`/Protect würde den Rest der Platte fressen. |
-| Protect auf der OS-Platte | UI Storage Daemon repartitioniert die HDD. |
-| HDD ziehen | Ohne Platte kein OS. |
-| `env default -a` | Löscht den SCSI-Boot. |
+| Web UI “Update” / `fwupdate` / `ubnt-systool fwupdate` | Writes the dead eMMC (`/dev/boot` or `/dev/sdb2`). |
+| Factory reset | Restores the USB `bootcmd`. |
+| **`usb start`** in U-Boot | XHCI Event-33 crash on affected boards. |
+| Expand GPT to the full 1 TB | `usd`/Protect would consume the rest of the disk. |
+| Protect on the OS disk | UI storage daemon repartitions the HDD. |
+| Remove the HDD | No disk means no OS. |
+| `env default -a` | Wipes SCSI boot. |
 
 ---
 
-## Architektur
+## Architecture
 
 Stock:
 
 ```
-SPI 8 MiB (U-Boot + Env) → usb start → eMMC (GL3224) → Debian/UniFi OS
+SPI 8 MiB (U-Boot + env) → usb start → eMMC (GL3224) → Debian/UniFi OS
 ```
 
-Dieses Setup:
+This setup:
 
 ```
 SPI 8 MiB → scsi init → HDD sda1 /uImage (FIT #udmpro@N) → sda3 /rootfs (squashfs)
 ```
 
-GPT auf der HDD (**nicht** vergrößern):
+GPT on the HDD (**do not grow it**):
 
-| Teil | Größe | Label | Inhalt |
+| Part | Size | Label | Contents |
 |---|---|---|---|
-| sda1 | 64 MiB | boot | Datei `uImage` (FIT) |
-| sda2 | 32 MiB | recovery | roh / optional |
-| sda3 | 2 GiB | root | Datei `rootfs` (Squashfs, **4K-padding**) |
+| sda1 | 64 MiB | boot | `uImage` file (FIT) |
+| sda2 | 32 MiB | recovery | raw / optional |
+| sda3 | 2 GiB | root | `rootfs` file (squashfs, **4K padding**) |
 | sda4 | 1 GiB | log | `/var/log` |
-| sda5 | 2 GiB | persistent | `/persistent` (Skripte überleben Overlay-Wipe) |
-| sda6 | 9,5 GiB | overlay | overlayfs |
+| sda5 | 2 GiB | persistent | `/persistent` (scripts survive overlay wipe) |
+| sda6 | 9.5 GiB | overlay | overlayfs |
 
-`/dev/disk/by-partlabel/*` zeigt auf `sda*`. Initramfs mountet darüber — die Platte muss **nicht** `/dev/boot` heißen.
+`/dev/disk/by-partlabel/*` already points at `sda*`. Initramfs mounts by partlabel — the disk does **not** need to be named `/dev/boot`.
 
-`fit_index` kommt aus dem Board (U-Boot-Zeile `model = udmpro, … fit_index = N`). Rev. 10 → **`2`** (`#udmpro@2`). Ältere BOM oft `@1`. Falsch → Kernel startet nicht.
+`fit_index` comes from the board (U-Boot line `model = udmpro, … fit_index = N`). Rev. 10 → **`2`** (`#udmpro@2`). Older BOM often `@1`. Wrong index → kernel will not start.
 
-SPI-Env nach der Umstellung:
+SPI env after conversion:
 
 ```
 bootcmd=scsi init; ext4load scsi 0:1 ${loadaddr} /uImage; bootm ${loadaddr}#udmpro@${fit_index}
@@ -82,32 +82,32 @@ bootdelay=5
 loadaddr=0x08000000
 ```
 
-`systemd.mask=usd.service` in den Bootargs überlebt ein leeres Overlay. Trotzdem nach jedem Major-Update `install.sh` laufen lassen.
+`systemd.mask=usd.service` in bootargs survives an empty overlay. Still run `install.sh` after every major update.
 
 ---
 
-## Voraussetzungen
+## Prerequisites
 
-- USB-Serial-Adapter an der UDM-Pro-Debug-Leiste, `115200`.
+- USB serial adapter on the UDM Pro debug header, `115200`.  
   macOS: `screen /dev/tty.usbserial-* 115200`
-- Ethernet: Mac **direkt an WAN (Port 9)**, statisch z. B. `192.168.1.100/24`. U-Boot: `al_eth1`, `ipaddr=192.168.1.50`, `serverip=192.168.1.100`.
-- LAN-UI später an Port **1–8**, `https://192.168.1.1` — nicht WAN.
-- Offizielles `UDMPRO-x.y.z.bin` (Header `UBNTUDMPRO.al324`).
-- Optional zum RAM-Boot: `recovery.img` (32 MiB FIT), z. B. Dump der Recovery-Partition einer gleichen UDM Pro, oder Community-Dumps. Ohne Recovery kommst du mit einem Kernel-FIT aus einem `.bin` ebenfalls nach RAM (`inspect-bin.py`, dann TFTP nur des FIT).
-- TFTP-Server auf dem Mac (Port 69) und/oder `python3 -m http.server 8000`.
+- Ethernet: computer **directly on WAN (port 9)**, static e.g. `192.168.1.100/24`. U-Boot: `al_eth1`, `ipaddr=192.168.1.50`, `serverip=192.168.1.100`.
+- LAN UI later on ports **1–8**, `https://192.168.1.1` — not WAN.
+- Official `UDMPRO-x.y.z.bin` (header `UBNTUDMPRO.al324`).
+- Optional for RAM boot: `recovery.img` (32 MiB FIT), e.g. a dump of the recovery partition from a matching UDM Pro, or community dumps. Without recovery you can TFTP the kernel FIT extracted from a `.bin` (`inspect-bin.py`).
+- TFTP server on the computer (port 69) and/or `python3 -m http.server 8000`.
 
-Skripte in `sata-tools/` zuerst auf dem Mac prüfen:
+Check scripts on the computer first:
 
 ```sh
-python3 sata-tools/inspect-bin.py /pfad/UDMPRO-x.y.z.bin
-# muss FIT mit udmpro@2 und ein großes squashfs finden
+python3 sata-tools/inspect-bin.py /path/to/UDMPRO-x.y.z.bin
+# must find a FIT with udmpro@2 and a large squashfs
 ```
 
 ---
 
-## Schritt 1 — U-Boot, kein USB
+## Step 1 — U-Boot, no USB
 
-Kaltstart, **Esc Esc** während `Autobooting in 5 seconds`.
+Cold boot, **Esc Esc** during `Autobooting in 5 seconds`.
 
 ```
 setenv bootdelay 30
@@ -116,9 +116,9 @@ scsi init
 scsi info
 ```
 
-Die HDD muss als Device 0 erscheinen. **Nicht** `usb start`.
+The HDD must show up as device 0. Do **not** `usb start`.
 
-Netz (WAN):
+Network (WAN):
 
 ```
 setenv ipaddr 192.168.1.50
@@ -128,9 +128,9 @@ setenv ethact al_eth1
 
 ---
 
-## Schritt 2 — Kernel nur nach RAM
+## Step 2 — Kernel to RAM only
 
-TFTP eines FIT (`recovery.img` oder das aus `inspect-bin.py` extrahierte uImage) nach `0x08000000`.
+TFTP a FIT (`recovery.img` or the uImage extracted via `inspect-bin.py`) to `0x08000000`.
 
 ```
 tftpboot 0x08000000 recovery.img
@@ -138,9 +138,9 @@ setenv bootargs pci=pcie_bus_perf console=ttyS0,115200 panic=3 reboot=cold rdini
 bootm 0x08000000#udmpro@2
 ```
 
-`@2` durch deinen `fit_index` ersetzen. Ohne `console=ttyS0,115200` bleibt der Kernel stumm. `rdinit=/bin/sh` verhindert, dass Debian die Overlay-Platte anfasst, bevor sie formatiert ist.
+Replace `@2` with your `fit_index`. Without `console=ttyS0,115200` the kernel is silent. `rdinit=/bin/sh` stops Debian from touching the overlay disk before it is formatted.
 
-In der BusyBox-Shell:
+In the BusyBox shell:
 
 ```
 mkdir -p /proc /sys /dev
@@ -149,7 +149,7 @@ mount -t sysfs sysfs /sys
 mount -t devtmpfs devtmpfs /dev
 ```
 
-Netz in der Initramfs (Namen variieren: `eth0`–`eth3` oder udev-Namen). Interface mit Carrier zum Mac:
+Initramfs NIC names vary (`eth0`–`eth3` or udev names). Bring up the interface with carrier to the computer:
 
 ```
 ip addr add 192.168.1.50/24 dev eth1
@@ -160,42 +160,42 @@ HDD: `/dev/sda`.
 
 ---
 
-## Schritt 3 — GPT anlegen und Firmware schreiben
+## Step 3 — Create GPT and write firmware
 
-Die HDD wird vollständig gelöscht.
+The HDD is fully erased.
 
-Skripte + `.bin` per HTTP vom Mac:
+Serve scripts + `.bin` over HTTP from the computer:
 
 ```sh
-# auf dem Mac, im Ordner mit .bin und sata-tools:
+# on the computer, in the folder with the .bin and sata-tools:
 python3 -m http.server 8000 --bind 192.168.1.100
 ```
 
-Auf der UDM (Initramfs oder später laufendes OS):
+On the UDM (initramfs or later a running OS):
 
 ```sh
 wget -O /tmp/format-os-disk.sh http://192.168.1.100:8000/sata-tools/format-os-disk.sh
 sh /tmp/format-os-disk.sh /dev/sda
 ```
 
-Firmware auf die neuen Partitionen (geht aus der Initramfs, wenn `sda1`/`sda3` gemountet werden, oder nach einem temporären SCSI-Boot). Bequemer: erst minimales `uImage` nach `sda1`, SCSI-booten, dann `udm-sata-apply-bin` im laufenden System.
+Firmware can be written from initramfs (mount `sda1`/`sda3`) or after a temporary SCSI boot. Practical path: put a minimal `uImage` on `sda1`, SCSI-boot, then run `udm-sata-apply-bin` on the running system.
 
-Minimal aus der Shell, nachdem `inspect-bin.py` Offsets gedruckt hat — oder das Apply-Skript nutzen, sobald Python3 da ist (Debian-Initramfs hat oft keins; Recovery-BusyBox ebenfalls). Praktischer Weg:
+Minimal shell path after `inspect-bin.py` prints offsets — Debian initramfs/BusyBox often has no Python:
 
-1. FIT mit `dd` aus dem `.bin` schneiden (Offsets von `inspect-bin.py`) und als `/uImage` nach `sda1` kopieren.
-2. Squashfs ebenso nach `sda3:/rootfs`, **auf 4096 Byte auffüllen**.
-3. `sda4`–`sda6` sind leer formatiert — reichen für den ersten Start.
+1. `dd` the FIT out of the `.bin` (offsets from `inspect-bin.py`) onto `sda1` as `/uImage`.
+2. Same for squashfs onto `sda3:/rootfs`, **pad to 4096 bytes**.
+3. `sda4`–`sda6` empty ext4 is enough for first boot.
 
-Beispiel (Offsets sind **pro .bin anders**; nicht kopieren, sondern `inspect-bin.py` nehmen):
+Example (offsets **differ per .bin**; always use `inspect-bin.py`):
 
 ```sh
-# auf dem Mac:
+# on the computer:
 python3 sata-tools/inspect-bin.py UDMPRO.bin
 # fit off=… size=…    rootfs off=… size=…
 
 dd if=UDMPRO.bin bs=1 skip=$FIT_OFF count=$FIT_SIZE of=uImage
 dd if=UDMPRO.bin bs=1 skip=$SQ_OFF count=$SQ_SIZE of=rootfs
-# rootfs auf Vielfaches von 4096 padden
+# pad rootfs to a multiple of 4096
 python3 - <<'PY'
 from pathlib import Path
 p = Path("rootfs")
@@ -207,15 +207,15 @@ print("padded", p.stat().st_size)
 PY
 ```
 
-Per HTTP auf die UDM, `sda1`/`sda3` mounten, Dateien hinlegen, `sync`.
+HTTP the files onto the UDM, mount `sda1`/`sda3`, copy, `sync`.
 
-Ohne 4K-Padding: `mount: ... squashfs ... Invalid argument` und Reboot-Loop (`panic=3`).
+Without 4K padding: `mount: ... squashfs ... Invalid argument` and a reboot loop (`panic=3`).
 
 ---
 
-## Schritt 4 — SCSI-Boot testen, dann speichern
+## Step 4 — Test SCSI boot, then save
 
-U-Boot (noch **kein** `saveenv`):
+U-Boot (**no** `saveenv` yet):
 
 ```
 scsi init
@@ -224,7 +224,7 @@ setenv bootargs pci=pcie_bus_perf console=ttyS0,115200 panic=3 reboot=cold syste
 bootm 0x08000000#udmpro@2
 ```
 
-Wenn Debian/UniFi hochkommt:
+When Debian/UniFi comes up:
 
 ```
 setenv bootcmd 'scsi init; ext4load scsi 0:1 ${loadaddr} /uImage; bootm ${loadaddr}#udmpro@${fit_index}'
@@ -233,36 +233,36 @@ setenv bootdelay 5
 saveenv
 ```
 
-Erst speichern, wenn dieser Boot geklappt hat. `loadaddr` ist üblicherweise `0x08000000`.
+Save only after that boot worked. `loadaddr` is usually `0x08000000`.
 
 ---
 
-## Schritt 5 — Guard installieren
+## Step 5 — Install the guard
 
-SSH oder Serial, als root. Skripte nach `/tmp` oder `/persistent` kopieren, dann:
+SSH or serial, as root. Copy scripts to `/tmp` or `/persistent`, then:
 
 ```sh
-sh sata-tools/install.sh /pfad/zu/sata-tools
+sh sata-tools/install.sh /path/to/sata-tools
 udm-sata-env check    # scsi
 ```
 
-Das setzt:
+This:
 
-- SCSI-Env auf **beide** SPI-Kopien (`mtd1`+`mtd2`)
-- Masken für `usd.service` / `usdbd.service`
-- Early-Boot-Guard (USB-eMMC ausblenden, `/dev/boot` → `sda`)
-- Kopie unter `/persistent/udm-sata/bin/`
+- writes SCSI env to **both** SPI copies (`mtd1`+`mtd2`)
+- masks `usd.service` / `usdbd.service`
+- installs the early-boot guard (hide USB eMMC, `/dev/boot` → `sda`)
+- copies tools to `/persistent/udm-sata/bin/`
 
-Web-UI: LAN `https://192.168.1.1`. Nach Overlay-Wipe ist das ein frisches Setup.
+Web UI: LAN `https://192.168.1.1`. After an overlay wipe this is a fresh setup.
 
 ---
 
-## Spätere Firmware-Updates (ohne Serial)
+## Later firmware updates (no serial)
 
-Nicht die UI, nicht `fwupdate`.
+Not the UI, not `fwupdate`.
 
 ```sh
-# Mac: Offsets prüfen
+# computer: check offsets
 python3 sata-tools/inspect-bin.py UDMPRO-x.y.z.bin
 
 scp UDMPRO-x.y.z.bin root@192.168.1.1:/persistent/udm-sata/incoming/
@@ -271,61 +271,61 @@ udm-sata-env check
 python3 /persistent/udm-sata/bin/udm-sata-apply-bin /persistent/udm-sata/incoming/UDMPRO-x.y.z.bin
 ```
 
-Das Skript findet FIT/Squashfs selbst, paddet Rootfs, stellt SCSI-Env wieder her, leert das Overlay (Major-Sprung) und rebootet.
+The script finds FIT/squashfs itself, pads rootfs, restores SCSI env, wipes overlay (major jump), and reboots.
 
-Gleiche Major, Account behalten:
+Same major, keep the account:
 
 ```sh
 python3 /persistent/udm-sata/bin/udm-sata-apply-bin --keep-overlay /persistent/udm-sata/incoming/UDMPRO-x.y.z.bin
 ```
 
-Nach Overlay-Wipe: Setup-Wizard, SSH an, dann:
+After overlay wipe: setup wizard, enable SSH, then:
 
 ```sh
 sh /persistent/udm-sata/bin/install.sh /persistent/udm-sata/bin
 ```
 
-`/persistent` hat ~2 GiB. Eine ~900 MiB-`.bin` passt; ein Full-Backup von `sda3` oft nicht.
+`/persistent` is ~2 GiB. A ~900 MiB `.bin` fits; a full `sda3` backup often does not.
 
 ---
 
-## Skripte
+## Scripts
 
-| Datei | Rolle |
+| File | Role |
 |---|---|
-| `inspect-bin.py` / `ubnt_bin.py` | FIT + Squashfs in einer `.bin` finden (Mac) |
-| `format-os-disk.sh` | Stock-GPT auf `/dev/sda` (löscht die Platte) |
-| `udm-sata-apply-bin` | `.bin` → `sda1`/`sda3`, Env, optional Overlay-Wipe |
-| `udm-sata-env` | SPI-Env lesen/SCSI wiederherstellen |
-| `udm-sata-guard` | usd maskieren, USB-eMMC weg, Tools aus `/persistent` |
-| `install.sh` | Guard + Env auf der laufenden Box |
+| `inspect-bin.py` / `ubnt_bin.py` | Find FIT + squashfs in a `.bin` (computer) |
+| `format-os-disk.sh` | Stock GPT on `/dev/sda` (wipes the disk) |
+| `udm-sata-apply-bin` | `.bin` → `sda1`/`sda3`, env, optional overlay wipe |
+| `udm-sata-env` | Read SPI env / restore SCSI |
+| `udm-sata-guard` | Mask usd, hide USB eMMC, restore tools from `/persistent` |
+| `install.sh` | Guard + env on a running box |
 
-Env-Format: redundantes U-Boot, CRC32 nur über Payload (ohne Flags-Byte), `ENV_SIZE=0x4000`. `flashcp` kennt kein `-q`.
+Env format: redundant U-Boot, CRC32 over payload only (not the flags byte), `ENV_SIZE=0x4000`. `flashcp` has no `-q`.
 
 ---
 
 ## Troubleshooting
 
-**Reboot-Loop, Serial `mount fail ... squashfs /mnt/.boot/rootfs`**  
-Rootfs nicht 4K-aligned. Einmalig `rdinit=/bin/sh` in `bootargs` (**nicht** `saveenv`), `zstd_decompress` + `squashfs` laden, `sda3` mounten, Datei padden, ohne `rdinit` neu starten.
+**Reboot loop, serial `mount fail ... squashfs /mnt/.boot/rootfs`**  
+Rootfs is not 4K-aligned. One-shot `rdinit=/bin/sh` in `bootargs` (**do not** `saveenv`), load `zstd_decompress` + `squashfs`, mount `sda3`, pad the file, reboot without `rdinit`.
 
 **`fwupdate` → `failed writing part 'rootfs' to '/dev/sdb2'`**  
-Erwartetes Verhalten. USB-Bootcarrier ist die tote GL3224. Nur `udm-sata-apply-bin`.
+Expected. The USB boot carrier is the dead GL3224. Use `udm-sata-apply-bin` only.
 
-**Falsches Device-Tree / Kernel hängt**  
-`fit_index` / `#udmpro@N` muss zur BOM passen. U-Boot druckt das beim Start.
+**Wrong device tree / kernel hangs**  
+`fit_index` / `#udmpro@N` must match the BOM. U-Boot prints it at start.
 
-**Protect-Platte leer, OS weg**  
-`usd` war nicht maskiert. GPT neu, Firmware neu, Guard + `systemd.mask` in SPI.
+**Protect disk empty, OS gone**  
+`usd` was not masked. Recreate GPT, rewrite firmware, reinstall guard + `systemd.mask` in SPI.
 
-**SSH Host-Key**  
-Nach Overlay-Wipe ändert sich der Key. Nicht `known_hosts` kaputtmachen: `UserKnownHostsFile=/dev/null` für diesen Host.
+**SSH host key**  
+Changes after overlay wipe. Do not trash `known_hosts`: use `UserKnownHostsFile=/dev/null` for this host.
 
 ---
 
 ## Credits
 
-- Ubiquiti-Community: eMMC-/GL3224-Hardware, Recovery-Dumps, Desolder-Writeups.
-- Alpine/U-Boot `2015.07-alpine_db` auf AL324.
+- Ubiquiti community: eMMC/GL3224 hardware, recovery dumps, desolder writeups.
+- Alpine/U-Boot `2015.07-alpine_db` on AL324.
 
-Lizenz der Skripte: MIT (siehe `LICENSE`). UniFi OS und `.bin`-Firmware sind Eigentum von Ubiquiti.
+Scripts: MIT (see `LICENSE`). UniFi OS and `.bin` firmware are Ubiquiti property.
