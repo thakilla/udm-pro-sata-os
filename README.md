@@ -6,7 +6,11 @@ This repo moves **UniFi OS onto the SATA drive in the Protect bay** and makes U-
 
 **You do not need a donor dump.** No `recovery.img`, no `whole.img`, no community eMMC images. Download the latest official UniFi OS firmware for UDM Pro from [ui.com/download/software/udm-pro](https://ui.com/download/software/udm-pro) (`UDMPRO-*.bin`, platform `al324`). That one file is the RAM-boot FIT, the kernel, and the squashfs.
 
-Tested: **UDM Pro** (not SE / Pro Max / base UDM), BOM rev 10, `fit_index=2`, UniFi OS 3.1.16 → 5.1.33, WDC WD10EFRX 1 TB HDD.
+This procedure is written so an **AI agent with serial-console access** can run it (U-Boot timing, TFTP, `rdinit`, `saveenv`). Hand-typing works, but the 2-second Esc window and the USB/`usb start` traps are easy to miss. Point the agent at this README plus `AGENTS.md`.
+
+After the first conversion, a later firmware apply does **not** need serial. Give the agent the `.bin` and the skill at `.agents/skills/udm-pro-sata/` (SSH-only update: inspect, `udm-sata-apply-bin`, reinstall guard).
+
+Tested: **UDM Pro** (not SE / Pro Max / base UDM), BOM rev 10, `fit_index=2`, UniFi OS 3.1.16 → 5.1.33, WDC WD10EFRX 1 TB HDD. Scripts and the serial flow were developed on **macOS** with a [Waveshare Industrial USB to TTL (C) 6-pin cable (FT232RNL)](https://www.amazon.de/dp/B0CX55K4RG) (`/dev/tty.usbserial-*`, 115200).
 
 ## Warning
 
@@ -28,7 +32,7 @@ Related hardware approach (desolder GL3224, USB stick on the internal bus):
 - A **disposable** SATA HDD/SSD fits the Protect bay (2.5″/3.5″ depending on the cage).
 - The latest **`UDMPRO-*.bin`** from [ui.com/download/software/udm-pro](https://ui.com/download/software/udm-pro) (platform `al324`, not SE). No extra dumps.
 
-The **first** conversion needs serial. Once the SCSI `bootcmd` is stored in SPI, leave the console disconnected: later OS updates are SSH-only (`udm-sata-apply-bin`). Never the Web UI or `fwupdate`. Turn **off every automatic update under Control Plane** or the box will apply an official update and brick itself again.
+The **first** conversion needs serial (best run by an agent that can drive that console). Once the SCSI `bootcmd` is stored in SPI, leave the console disconnected: later OS updates are SSH-only via the skill / `udm-sata-apply-bin`. Never the Web UI or `fwupdate`. Turn **off every automatic update under Control Plane** or the box will apply an official update and brick itself again.
 
 ---
 
@@ -92,7 +96,7 @@ loadaddr=0x08000000
 ## Prerequisites
 
 - USB serial adapter on the UDM Pro debug header, `115200`.  
-  macOS: `screen /dev/tty.usbserial-* 115200`
+  Developed on a Mac with this adapter: [Waveshare Industrial USB to TTL (C), FT232RNL](https://www.amazon.de/dp/B0CX55K4RG) (`screen /dev/tty.usbserial-* 115200`). Any 3.3 V TTL UART at 115200 8N1 should work.
 - Ethernet: computer **directly on WAN (port 9)** — not LAN 1–8. Static IPv4 on the computer, no DHCP, no gateway:
 
   | | Address |
@@ -373,7 +377,7 @@ After overlay wipe: setup wizard, enable SSH, then the same `install.sh`.
 
 ## Scripts
 
-Agent skill (update/unbrick rules): `.agents/skills/udm-pro-sata/`. See also `AGENTS.md`.
+Agent skill for a later firmware update (SSH, no serial): `.agents/skills/udm-pro-sata/`. First conversion: this README + `AGENTS.md`.
 
 | File | Role |
 |---|---|
