@@ -69,6 +69,11 @@ def main() -> None:
 
     p = argparse.ArgumentParser(description="Show FIT/squashfs offsets in a UDMPRO .bin")
     p.add_argument("firmware")
+    p.add_argument(
+        "--extract-fit",
+        metavar="PATH",
+        help="write the OS FIT (kernel + DT + ramdisk) for TFTP / sda1:/uImage",
+    )
     args = p.parse_args()
     path = Path(args.firmware)
     fit_off, fit_size, sq_off, sq_size = inspect(path)
@@ -76,6 +81,10 @@ def main() -> None:
     print(f"fit\toff={fit_off} size={fit_size} ({fit_size / 1024 / 1024:.2f} MiB)")
     print(f"rootfs\toff={sq_off} size={sq_size} ({sq_size / 1024 / 1024:.1f} MiB)")
     print("udmpro@2: yes")
+    if args.extract_fit:
+        out = Path(args.extract_fit)
+        out.write_bytes(path.read_bytes()[fit_off : fit_off + fit_size])
+        print(f"wrote\t{out} ({fit_size} bytes)")
     sys.exit(0)
 
 

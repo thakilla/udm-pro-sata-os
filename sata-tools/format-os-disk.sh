@@ -1,7 +1,7 @@
 #!/bin/sh
 # Create the UniFi OS GPT on /dev/sda. WIPES THE DISK.
 # Sizes match stock UDM Pro eMMC layout. Do NOT expand to the full HDD.
-# Recovery.img has GNU parted + mkfs.ext4, not sgdisk.
+# The .bin FIT ramdisk has GNU parted + mkfs.ext4, not sgdisk.
 set -eu
 DEV="${1:-/dev/sda}"
 

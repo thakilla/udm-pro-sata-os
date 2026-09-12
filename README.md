@@ -4,7 +4,9 @@ The internal eMMC behind USB (ASM1142 + **GL3224**) can die: U-Boot runs `usb st
 
 This repo moves **UniFi OS onto the SATA drive in the Protect bay** and makes U-Boot boot from SCSI permanently. After that, firmware updates no longer need the dead eMMC — and they must **not** use Ubiquiti `fwupdate`, which still targets USB storage.
 
-Tested: **UDM Pro** (not SE / Pro Max / base UDM), BOM rev 10, `fit_index=2`, UniFi OS 3.1.16 → 5.1.26, WDC WD10EFRX 1 TB HDD.
+**You do not need a donor dump.** No `recovery.img`, no `whole.img`, no community eMMC images. Download the latest official UniFi OS firmware for UDM Pro from [ui.com/download/software/udm-pro](https://ui.com/download/software/udm-pro) (`UDMPRO-*.bin`, platform `al324`). That one file is the RAM-boot FIT, the kernel, and the squashfs.
+
+Tested: **UDM Pro** (not SE / Pro Max / base UDM), BOM rev 10, `fit_index=2`, UniFi OS 3.1.16 → 5.1.33, WDC WD10EFRX 1 TB HDD.
 
 ## Warning
 
@@ -24,7 +26,7 @@ Related hardware approach (desolder GL3224, USB stick on the internal bus):
 - UDM Pro no longer boots (USB eMMC dead or 0 bytes).
 - Serial console works (115200 8N1).
 - A **disposable** SATA HDD/SSD fits the Protect bay (2.5″/3.5″ depending on the cage).
-- You have an official **`UDMPRO-*.bin`** (platform `al324`, not SE).
+- The latest **`UDMPRO-*.bin`** from [ui.com/download/software/udm-pro](https://ui.com/download/software/udm-pro) (platform `al324`, not SE). No extra dumps.
 
 The **first** conversion needs serial. Once the SCSI `bootcmd` is stored in SPI, leave the console disconnected: later OS updates are SSH-only (`udm-sata-apply-bin`). Never the Web UI or `fwupdate`. Turn **off every automatic update under Control Plane** or the box will apply an official update and brick itself again.
 
@@ -111,8 +113,7 @@ loadaddr=0x08000000
 
   U-Boot uses `al_eth1` for WAN. If `ping 192.168.1.100` fails, try `setenv ethact al_eth3`.
 - LAN UI later on ports **1–8**, `https://192.168.1.1` — not WAN.
-- Official `UDMPRO-x.y.z.bin` (header `UBNTUDMPRO.al324`).
-- Optional for RAM boot: `recovery.img` (32 MiB FIT), e.g. a dump of the recovery partition from a matching UDM Pro, or community dumps. Without recovery you can TFTP the kernel FIT extracted from a `.bin` (`inspect-bin.py`).
+- Latest `UDMPRO-x.y.z.bin` from [ui.com/download/software/udm-pro](https://ui.com/download/software/udm-pro) (header `UBNTUDMPRO.al324`). Same file for TFTP RAM-boot and for writing `sda1`/`sda3`. Do not hunt for `recovery.img` or other dumps.
 - TFTP: use `sata-tools/tftp-server.py` (see Step 2). HTTP `:8000` is only after Linux is already in RAM.
 
 Check scripts on the computer first:
@@ -139,13 +140,14 @@ The HDD must show up as device 0. Do **not** `usb start`.
 
 ---
 
-## Step 2 — TFTP `recovery.img` into RAM
+## Step 2 — TFTP the OS FIT into RAM
 
-On the computer (NIC already `192.168.1.100/24` as above):
+Extract the FIT from the same official `.bin` you downloaded (kernel + board DTs + initramfs with `parted`, `mkfs.ext4`, `wget`). Nothing else.
 
 ```sh
 mkdir -p /tmp/udm-tftp
-cp /path/to/recovery.img /tmp/udm-tftp/recovery.img
+python3 sata-tools/inspect-bin.py /path/to/UDMPRO-x.y.z.bin --extract-fit /tmp/udm-tftp/uImage
+# expect ~14 MiB, udmpro@2: yes
 
 # U-Boot talks to UDP 69. macOS needs sudo for that bind.
 sudo python3 sata-tools/tftp-server.py /tmp/udm-tftp 192.168.1.100 69
@@ -156,7 +158,7 @@ python3 sata-tools/tftp-server.py /tmp/udm-tftp 192.168.1.100 6969
 
 Both listeners share `/tmp/udm-tftp`. The first successful `tftpboot` used **:69**. :6969 is only a fallback if you later set `tftpdstp` on a build that honors it. This Alpine U-Boot usually ignores `tftpdstp` and still hits 69 — so without the `sudo` process, U-Boot prints `TFTP server died`.
 
-U-Boot, WAN (port 9). Persist a long `bootdelay` **now** (`saveenv`) if the SPI env is still stock USB — recovery’s `reboot` comes back with `bootdelay=2` and will `usb start` unless you catch Esc Esc. Try `al_eth1` first; if `ping` fails, `al_eth3`:
+U-Boot, WAN (port 9). Persist a long `bootdelay` **now** (`saveenv`) if the SPI env is still stock USB — the ramdisk `reboot` comes back with `bootdelay=2` and will `usb start` unless you catch Esc Esc. Try `al_eth1` first; if `ping` fails, `al_eth3`:
 
 ```
 setenv bootdelay 30
@@ -166,17 +168,17 @@ setenv ipaddr 192.168.1.50
 setenv serverip 192.168.1.100
 setenv netmask 255.255.255.0
 ping 192.168.1.100
-tftpboot 0x08000000 recovery.img
+tftpboot 0x08000000 uImage
 ```
 
-Expect `Bytes transferred = 33554432` (~32 MiB). Then boot from RAM only — **do not** `saveenv` yet:
+Expect `Bytes transferred` ≈ the FIT size from `inspect-bin.py` (~14 MiB, not 32 MiB). Then boot from RAM only — **do not** `saveenv` yet:
 
 ```
 setenv bootargs pci=pcie_bus_perf console=ttyS0,115200 panic=3 reboot=cold rdinit=/bin/sh
 bootm 0x08000000#udmpro@2
 ```
 
-Replace `@2` with your `fit_index`. Without `console=ttyS0,115200` the kernel is silent. `rdinit=/bin/sh` stops Debian from touching the overlay disk before it is formatted.
+Replace `@2` with your `fit_index`. Without `console=ttyS0,115200` the kernel is silent. `rdinit=/bin/sh` stops the ramdisk from continuing into Debian and touching the disk before it is formatted. The BusyBox prompt is that initramfs, not a separate open-source recovery OS.
 
 In the BusyBox shell:
 
@@ -204,7 +206,7 @@ HDD: `/dev/sda`.
 
 The HDD is fully erased.
 
-Do **not** TFTP or `wget` a donor `whole.img` / `boot.img` / `root.img` onto the UDM. Those files are leftover from the first conversion (a 15 GiB eMMC `dd`). This procedure builds the GPT with `format-os-disk.sh` and writes FIT + squashfs from an official `UDMPRO-*.bin`. TFTP is only for the 32 MiB `recovery.img` in Step 2.
+Build the GPT with `format-os-disk.sh` and write FIT + squashfs from the official `.bin`. TFTP in Step 2 is only the ~14 MiB FIT from that file — not a donor disk image.
 
 Serve scripts + `.bin` over HTTP from the computer:
 
@@ -390,13 +392,13 @@ Env format: redundant U-Boot, CRC32 over payload only (not the flags byte), `ENV
 ## Troubleshooting
 
 **`TFTP server died` / `Retry count exceeded`**  
-Nothing is bound on UDP 69. The :6969 process is not enough. Start `sudo python3 sata-tools/tftp-server.py /tmp/udm-tftp 192.168.1.100 69`, confirm `ping 192.168.1.100` on `al_eth1` (or `al_eth3`), then `tftpboot` again. Do not use YModem/`loady` for the 32 MiB FIT.
+Nothing is bound on UDP 69. The :6969 process is not enough. Start `sudo python3 sata-tools/tftp-server.py /tmp/udm-tftp 192.168.1.100 69`, confirm `ping 192.168.1.100` on `al_eth1` (or `al_eth3`), then `tftpboot` again. Do not use YModem/`loady` for the FIT.
 
 **`wget: can't open '/tmp/...'`**  
-Recovery ramdisk has no `/tmp` until `mkdir -p /tmp`.
+The ramdisk has no `/tmp` until `mkdir -p /tmp`.
 
 **`format-os-disk.sh`: `sgdisk: not found`**  
-Expected in `recovery.img`. Current script uses `parted` in that case. Re-copy the script from this repo.
+Expected in this ramdisk. Current script uses `parted` in that case. Re-copy the script from this repo.
 
 **`reboot` in recovery does nothing**  
 Use `reboot -f` or sysrq `b`. Plain `reboot` stays in the ramdisk.
@@ -423,7 +425,7 @@ Changes after overlay wipe. Do not trash `known_hosts`: use `UserKnownHostsFile=
 
 ## Credits
 
-- Ubiquiti community: eMMC/GL3224 hardware, recovery dumps, desolder writeups.
+- Ubiquiti community: eMMC/GL3224 hardware and desolder writeups. Firmware comes from [ui.com/download/software/udm-pro](https://ui.com/download/software/udm-pro), not from dumps.
 - Alpine/U-Boot `2015.07-alpine_db` on AL324.
 
 Scripts: MIT (see `LICENSE`). UniFi OS and `.bin` firmware are Ubiquiti property.
