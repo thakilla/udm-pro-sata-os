@@ -355,17 +355,23 @@ Same major, keep the account:
 python3 /persistent/udm-sata/bin/udm-sata-apply-bin --keep-overlay /persistent/udm-sata/incoming/UDMPRO-x.y.z.bin
 ```
 
-After overlay wipe: setup wizard, enable SSH, then:
+A new squashfs drops `/usr/local/sbin` even with `--keep-overlay`. After **every** apply reboot, before calling it done:
 
 ```sh
 sh /persistent/udm-sata/bin/install.sh /persistent/udm-sata/bin
+systemctl start udm-sata-guard.service
+udm-sata-env check
 ```
+
+After overlay wipe: setup wizard, enable SSH, then the same `install.sh`.
 
 `/persistent` is ~2 GiB. A ~900 MiB `.bin` fits; a full `sda3` backup often does not.
 
 ---
 
 ## Scripts
+
+Agent skill (update/unbrick rules): `.agents/skills/udm-pro-sata/`. See also `AGENTS.md`.
 
 | File | Role |
 |---|---|
