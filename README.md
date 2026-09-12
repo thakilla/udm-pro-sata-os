@@ -91,11 +91,29 @@ loadaddr=0x08000000
 
 - USB serial adapter on the UDM Pro debug header, `115200`.  
   macOS: `screen /dev/tty.usbserial-* 115200`
-- Ethernet: computer **directly on WAN (port 9)**, static e.g. `192.168.1.100/24`. U-Boot: `al_eth1`, `ipaddr=192.168.1.50`, `serverip=192.168.1.100`.
+- Ethernet: computer **directly on WAN (port 9)** — not LAN 1–8. Static IPv4 on the computer, no DHCP, no gateway:
+
+  | | Address |
+  |---|---|
+  | Computer (TFTP/HTTP server) | `192.168.1.100/24` |
+  | Netmask | `255.255.255.0` |
+  | UDM U-Boot (`ipaddr`) | `192.168.1.50` |
+  | UDM `serverip` | `192.168.1.100` |
+
+  On macOS the USB-C NIC was `en14` (“USB 10/100/1000 LAN”):
+
+  ```sh
+  networksetup -listallhardwareports   # find the USB Ethernet device
+  sudo ifconfig en14 inet 192.168.1.100 netmask 255.255.255.0
+  # or: networksetup -setmanual "USB 10/100/1000 LAN" 192.168.1.100 255.255.255.0
+  ifconfig en14   # inet 192.168.1.100, status: active
+  ```
+
+  U-Boot uses `al_eth1` for WAN. If `ping 192.168.1.100` fails, try `setenv ethact al_eth3`.
 - LAN UI later on ports **1–8**, `https://192.168.1.1` — not WAN.
 - Official `UDMPRO-x.y.z.bin` (header `UBNTUDMPRO.al324`).
 - Optional for RAM boot: `recovery.img` (32 MiB FIT), e.g. a dump of the recovery partition from a matching UDM Pro, or community dumps. Without recovery you can TFTP the kernel FIT extracted from a `.bin` (`inspect-bin.py`).
-- TFTP server on the computer (port 69) and/or `python3 -m http.server 8000`.
+- TFTP: use `sata-tools/tftp-server.py` (see Step 2). HTTP `:8000` is only after Linux is already in RAM.
 
 Check scripts on the computer first:
 
@@ -119,22 +137,41 @@ scsi info
 
 The HDD must show up as device 0. Do **not** `usb start`.
 
-Network (WAN):
-
-```
-setenv ipaddr 192.168.1.50
-setenv serverip 192.168.1.100
-setenv ethact al_eth1
-```
-
 ---
 
-## Step 2 — Kernel to RAM only
+## Step 2 — TFTP `recovery.img` into RAM
 
-TFTP a FIT (`recovery.img` or the uImage extracted via `inspect-bin.py`) to `0x08000000`.
+On the computer (NIC already `192.168.1.100/24` as above):
+
+```sh
+mkdir -p /tmp/udm-tftp
+cp /path/to/recovery.img /tmp/udm-tftp/recovery.img
+
+# U-Boot talks to UDP 69. macOS needs sudo for that bind.
+sudo python3 sata-tools/tftp-server.py /tmp/udm-tftp 192.168.1.100 69
+
+# same files, unprivileged extra listener (leave it running; does not replace :69)
+python3 sata-tools/tftp-server.py /tmp/udm-tftp 192.168.1.100 6969
+```
+
+Both listeners share `/tmp/udm-tftp`. The first successful `tftpboot` used **:69**. :6969 is only a fallback if you later set `tftpdstp` on a build that honors it. This Alpine U-Boot usually ignores `tftpdstp` and still hits 69 — so without the `sudo` process, U-Boot prints `TFTP server died`.
+
+U-Boot, WAN (port 9). Persist a long `bootdelay` **now** (`saveenv`) if the SPI env is still stock USB — recovery’s `reboot` comes back with `bootdelay=2` and will `usb start` unless you catch Esc Esc. Try `al_eth1` first; if `ping` fails, `al_eth3`:
 
 ```
+setenv bootdelay 30
+saveenv
+setenv ethact al_eth1
+setenv ipaddr 192.168.1.50
+setenv serverip 192.168.1.100
+setenv netmask 255.255.255.0
+ping 192.168.1.100
 tftpboot 0x08000000 recovery.img
+```
+
+Expect `Bytes transferred = 33554432` (~32 MiB). Then boot from RAM only — **do not** `saveenv` yet:
+
+```
 setenv bootargs pci=pcie_bus_perf console=ttyS0,115200 panic=3 reboot=cold rdinit=/bin/sh
 bootm 0x08000000#udmpro@2
 ```
@@ -144,11 +181,13 @@ Replace `@2` with your `fit_index`. Without `console=ttyS0,115200` the kernel is
 In the BusyBox shell:
 
 ```
-mkdir -p /proc /sys /dev
+mkdir -p /proc /sys /dev /tmp
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
 mount -t devtmpfs devtmpfs /dev
 ```
+
+`/tmp` does **not** exist until you create it (`wget -O /tmp/...` otherwise fails). This ramdisk has `parted`, `mkfs.ext4`, `wget` — **not** `sgdisk` or Python. `format-os-disk.sh` falls back to `parted`.
 
 Initramfs NIC names vary (`eth0`–`eth3` or udev names). Bring up the interface with carrier to the computer:
 
@@ -165,6 +204,8 @@ HDD: `/dev/sda`.
 
 The HDD is fully erased.
 
+Do **not** TFTP or `wget` a donor `whole.img` / `boot.img` / `root.img` onto the UDM. Those files are leftover from the first conversion (a 15 GiB eMMC `dd`). This procedure builds the GPT with `format-os-disk.sh` and writes FIT + squashfs from an official `UDMPRO-*.bin`. TFTP is only for the 32 MiB `recovery.img` in Step 2.
+
 Serve scripts + `.bin` over HTTP from the computer:
 
 ```sh
@@ -172,14 +213,15 @@ Serve scripts + `.bin` over HTTP from the computer:
 python3 -m http.server 8000 --bind 192.168.1.100
 ```
 
-On the UDM (initramfs or later a running OS):
+On the UDM (recovery shell). Extract FIT + padded squashfs **on the computer** first (`inspect-bin.py`), serve `uImage` / `rootfs` / `sata-tools` on `:8000`:
 
 ```sh
+mkdir -p /tmp
 wget -O /tmp/format-os-disk.sh http://192.168.1.100:8000/sata-tools/format-os-disk.sh
 sh /tmp/format-os-disk.sh /dev/sda
 ```
 
-Firmware can be written from initramfs (mount `sda1`/`sda3`) or after a temporary SCSI boot. Practical path: put a minimal `uImage` on `sda1`, SCSI-boot, then run `udm-sata-apply-bin` on the running system.
+Then copy the extracted files onto the new ext4 partitions (recovery has no Python, so do **not** wait for a later `udm-sata-apply-bin` for the first write):
 
 Minimal shell path after `inspect-bin.py` prints offsets — Debian initramfs/BusyBox often has no Python:
 
@@ -208,42 +250,62 @@ print("padded", p.stat().st_size)
 PY
 ```
 
-HTTP the files onto the UDM, mount `sda1`/`sda3`, copy, `sync`.
+On the UDM:
+
+```sh
+mkdir -p /mnt/b /mnt/r
+mount /dev/sda1 /mnt/b
+mount /dev/sda3 /mnt/r
+wget -O /mnt/b/uImage http://192.168.1.100:8000/uImage
+wget -O /mnt/r/rootfs http://192.168.1.100:8000/rootfs
+sync
+umount /mnt/b /mnt/r
+```
+
+Recovery BusyBox `reboot` often does **nothing**. Use `reboot -f`, or `echo 1 > /proc/sys/kernel/sysrq; echo b > /proc/sysrq-trigger`. Then Esc Esc for U-Boot (Step 4).
 
 Without 4K padding: `mount: ... squashfs ... Invalid argument` and a reboot loop (`panic=3`).
 
 ---
 
-## Step 4 — Test SCSI boot, then save
+## Step 4 — Test SCSI load, then `saveenv` (still in U-Boot)
 
-U-Boot (**no** `saveenv` yet):
+A fresh overlay has **no serial root password**. You cannot `saveenv` from Debian. After `reboot` the stock env still has `bootdelay=2` and USB `bootcmd` — miss Esc Esc and `usb start` crashes.
+
+So: prove `ext4load` works, **then save SCSI env immediately**, then boot Linux.
 
 ```
 scsi init
 ext4load scsi 0:1 0x08000000 /uImage
-setenv bootargs pci=pcie_bus_perf console=ttyS0,115200 panic=3 reboot=cold systemd.mask=usd.service systemd.mask=usdbd.service
-bootm 0x08000000#udmpro@2
 ```
 
-When Debian/UniFi comes up:
+If that prints a ~14 MiB read:
 
 ```
 setenv bootcmd 'scsi init; ext4load scsi 0:1 ${loadaddr} /uImage; bootm ${loadaddr}#udmpro@${fit_index}'
 setenv bootargs pci=pcie_bus_perf console=ttyS0,115200 panic=3 reboot=cold systemd.mask=usd.service systemd.mask=usdbd.service
 setenv bootdelay 5
 saveenv
+boot
 ```
 
-Save only after that boot worked. `loadaddr` is usually `0x08000000`.
+`loadaddr` is usually `0x08000000`. Do not `bootm` the full OS first and only then try to persist env.
 
 ---
 
 ## Step 5 — Install the guard
 
-SSH or serial, as root. Copy scripts to `/tmp` or `/persistent`, then:
+Serial `root` has no password until the setup wizard. Use **SSH after the wizard** (LAN ports 1–8). Copy the tools onto the box first — `/persistent/udm-sata/bin` is empty on a new disk; `install.sh` cannot install from itself.
 
 ```sh
-sh sata-tools/install.sh /path/to/sata-tools
+# computer
+COPYFILE_DISABLE=1 tar -C sata-tools -czf /tmp/sata-tools.tgz .
+scp /tmp/sata-tools.tgz root@192.168.1.1:/tmp/
+
+# UDM
+tar -C /tmp -xzf /tmp/sata-tools.tgz
+# or: mkdir -p /tmp/sata-tools && tar -C /tmp/sata-tools -xzf /tmp/sata-tools.tgz
+sh /tmp/sata-tools/install.sh /tmp/sata-tools
 udm-sata-env check    # scsi
 ```
 
@@ -308,6 +370,7 @@ sh /persistent/udm-sata/bin/install.sh /persistent/udm-sata/bin
 | File | Role |
 |---|---|
 | `inspect-bin.py` / `ubnt_bin.py` | Find FIT + squashfs in a `.bin` (computer) |
+| `tftp-server.py` | TFTP RRQ helper: `:69` (sudo) + optional `:6969` |
 | `format-os-disk.sh` | Stock GPT on `/dev/sda` (wipes the disk) |
 | `udm-sata-apply-bin` | `.bin` → `sda1`/`sda3`, env, optional overlay wipe |
 | `udm-sata-env` | Read SPI env / restore SCSI |
@@ -319,6 +382,21 @@ Env format: redundant U-Boot, CRC32 over payload only (not the flags byte), `ENV
 ---
 
 ## Troubleshooting
+
+**`TFTP server died` / `Retry count exceeded`**  
+Nothing is bound on UDP 69. The :6969 process is not enough. Start `sudo python3 sata-tools/tftp-server.py /tmp/udm-tftp 192.168.1.100 69`, confirm `ping 192.168.1.100` on `al_eth1` (or `al_eth3`), then `tftpboot` again. Do not use YModem/`loady` for the 32 MiB FIT.
+
+**`wget: can't open '/tmp/...'`**  
+Recovery ramdisk has no `/tmp` until `mkdir -p /tmp`.
+
+**`format-os-disk.sh`: `sgdisk: not found`**  
+Expected in `recovery.img`. Current script uses `parted` in that case. Re-copy the script from this repo.
+
+**`reboot` in recovery does nothing**  
+Use `reboot -f` or sysrq `b`. Plain `reboot` stays in the ramdisk.
+
+**Serial `Login incorrect` / no root password**  
+Fresh overlay. Do not hunt for a Unix password. `saveenv` from U-Boot (Step 4). After the LAN wizard, use SSH and `install.sh`.
 
 **Reboot loop, serial `mount fail ... squashfs /mnt/.boot/rootfs`**  
 Rootfs is not 4K-aligned. One-shot `rdinit=/bin/sh` in `bootargs` (**do not** `saveenv`), load `zstd_decompress` + `squashfs`, mount `sda3`, pad the file, reboot without `rdinit`.

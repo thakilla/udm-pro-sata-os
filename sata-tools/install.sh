@@ -19,7 +19,13 @@ install -m 644 "$HERE/udm-sata-guard.service" /etc/systemd/system/udm-sata-guard
 install -m 755 "$HERE/udm-sata.hook" /usr/lib/ubnt/hooks/system/bootup-top/05-udm-sata
 install -m 755 "$HERE/udm-sata.hook" /usr/lib/ubnt/hooks/system/upgrade-bottom/90-udm-sata
 
-cp -a "$HERE/." /persistent/udm-sata/bin/
+# Running from /persistent/udm-sata/bin itself: cp -a . . fails under set -e.
+PERS=/persistent/udm-sata/bin
+HERE_ABS=$(cd "$HERE" && pwd)
+PERS_ABS=$(cd "$PERS" && pwd)
+if [ "$HERE_ABS" != "$PERS_ABS" ]; then
+    cp -a "$HERE/." "$PERS/"
+fi
 chmod 755 /persistent/udm-sata/bin/udm-sata-env \
     /persistent/udm-sata/bin/udm-sata-guard \
     /persistent/udm-sata/bin/udm-sata-apply-bin \

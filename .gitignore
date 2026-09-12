@@ -1,13 +1,56 @@
-.DS_Store
+# Official UniFi firmware and disk dumps — do not publish
 *.bin
 *.img
 *.IMG
 *.raw
 *.dump
-*.pyc
+*.dd
+*.squashfs
+*.fit
+*.itb
+*.uboot
+*.ub
+
+# FIT / squashfs extracted from a .bin (README Step 3)
+uImage
+rootfs
+/incoming/
+/tftp/
+/udm-tftp/
+
+# Local copies people drop next to sata-tools
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+
+# Serial / TFTP leftovers
+*.log
+screenlog.*
+*.pcap
+*.cap
+
+# Secrets and machine-local env
+.env
+.env.*
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+
+# Python
 __pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+
+# Editors / OS
+.DS_Store
+Thumbs.db
 .idea/
 .vscode/
 *.swp
-.env
-*.log
+*.swo
+*~
+.cursor/
