@@ -1,0 +1,13 @@
+[Unit]
+Description=Mount leftover HDD space as /volume1 (Protect/Talk/Access)
+After=local-fs.target udm-sata-guard.service
+Requires=udm-sata-guard.service
+ConditionPathExists=/dev/disk/by-partlabel/volume1
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/persistent/udm-sata/bin/udm-sata-volume mount
+
+[Install]
+WantedBy=multi-user.target

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Early-boot: keep OS on SATA, hide dead USB eMMC, keep Protect off the HDD.
+# Early-boot: keep OS on SATA, hide dead USB eMMC, keep usd off the OS GPT.
 set -eu
 
 LOG=/var/log/udm-sata-guard.log
@@ -55,10 +55,14 @@ reinstall_tools() {
         mkdir -p /usr/local/sbin /etc/systemd/system /lib/systemd/system-shutdown
         cp -a "$BIN/udm-sata-env" "$BIN/udm-sata-guard" "$BIN/udm-sata-apply-bin" \
             /usr/local/sbin/ 2>/dev/null || true
+        cp -a "$BIN/udm-sata-volume" /usr/local/sbin/ 2>/dev/null || true
         cp -a "$BIN/ubnt_bin.py" /usr/local/sbin/ 2>/dev/null || true
         chmod 755 /usr/local/sbin/udm-sata-* 2>/dev/null || true
         if [ -f "$BIN/udm-sata-guard.service" ]; then
             cp -a "$BIN/udm-sata-guard.service" /etc/systemd/system/ 2>/dev/null || true
+        fi
+        if [ -f "$BIN/udm-sata-volume.service" ]; then
+            cp -a "$BIN/udm-sata-volume.service" /etc/systemd/system/ 2>/dev/null || true
         fi
         if [ -f "$BIN/udm-sata-restore-env" ]; then
             cp -a "$BIN/udm-sata-restore-env" /lib/systemd/system-shutdown/ 2>/dev/null || true
@@ -81,11 +85,24 @@ restore_env() {
     fi
 }
 
+mount_volume() {
+    vol=""
+    if [ -x /usr/local/sbin/udm-sata-volume ]; then
+        vol=/usr/local/sbin/udm-sata-volume
+    elif [ -x "$BIN/udm-sata-volume" ]; then
+        vol="$BIN/udm-sata-volume"
+    fi
+    if [ -n "$vol" ]; then
+        "$vol" mount >>"$LOG" 2>&1 || true
+    fi
+}
+
 mkdir -p /var/log /persistent/udm-sata
 reinstall_tools
 mask_usd
 unbind_usb_boot
 alias_boot_to_sda
 restore_env
+mount_volume
 log "guard done"
 exit 0

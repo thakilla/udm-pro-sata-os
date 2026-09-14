@@ -1,0 +1,264 @@
+#!/bin/sh
+# Leftover HDD space as /volume1 for Protect / Talk / Access.
+# Does NOT unmask usd/usdbd. Does NOT touch sda1–6 (OS GPT).
+set -eu
+
+DEV=/dev/sda
+PART=7
+LABEL=volume1
+MNT=/volume1
+SRV_TARGET="$MNT/.srv"
+MIN_SECTS=2097152 # 1 GiB at 512 B
+
+log() { echo "udm-sata-volume: $*"; }
+die() { echo "udm-sata-volume: $*" >&2; exit 1; }
+
+usd_running() {
+    systemctl is-active usd.service >/dev/null 2>&1 || \
+        systemctl is-active usdbd.service >/dev/null 2>&1
+}
+
+part_path() {
+    if [ -b "/dev/disk/by-partlabel/$LABEL" ]; then
+        echo "/dev/disk/by-partlabel/$LABEL"
+        return
+    fi
+    if [ -b "${DEV}${PART}" ]; then
+        echo "${DEV}${PART}"
+        return
+    fi
+    if [ -b "${DEV}p${PART}" ]; then
+        echo "${DEV}p${PART}"
+        return
+    fi
+    echo ""
+}
+
+os_last_sector() {
+    parted -s "$DEV" unit s print | awk '
+        /^ *[1-6] / {
+            gsub(/s/, "", $3)
+            if ($3 + 0 > last) last = $3 + 0
+        }
+        END { print last + 0 }
+    '
+}
+
+disk_sectors() {
+    parted -s "$DEV" unit s print | awk '/^Disk / { gsub(/s/, "", $3); print $3+0; exit }'
+}
+
+part_n_start() {
+    parted -s "$DEV" unit s print | awk -v n="$1" '
+        $1 == n { gsub(/s/, "", $2); print $2+0; exit }
+    '
+}
+
+part_n_end() {
+    parted -s "$DEV" unit s print | awk -v n="$1" '
+        $1 == n { gsub(/s/, "", $3); print $3+0; exit }
+    '
+}
+
+gib() {
+    awk -v s="$1" 'BEGIN { printf "%.1f", (s + 0) * 512 / (1024*1024*1024) }'
+}
+
+refresh_pt() {
+    partprobe "$DEV" 2>/dev/null || true
+    partx -u "$DEV" 2>/dev/null || true
+    udevadm settle 2>/dev/null || true
+}
+
+# Backup GPT sits at the old end after cloning onto a larger disk.
+relocate_backup_gpt() {
+    if command -v sgdisk >/dev/null 2>&1; then
+        sgdisk -e "$DEV" >/dev/null
+    fi
+}
+
+volume_start_after_os() {
+    last=$(os_last_sector)
+    [ "$last" -gt 0 ] || die "could not find end of OS partitions"
+    start=$((last + 1))
+    # 4 KiB physical alignment (8 × 512 B)
+    start=$(( (start + 7) / 8 * 8 ))
+    echo "$start"
+}
+
+wait_part_node() {
+    n=0
+    while [ "$n" -lt 20 ]; do
+        if [ -b "${DEV}${PART}" ] || [ -b "/dev/disk/by-partlabel/$LABEL" ]; then
+            return 0
+        fi
+        n=$((n + 1))
+        sleep 1
+    done
+    return 1
+}
+
+require_os_gpt() {
+    [ -b "$DEV" ] || die "missing $DEV"
+    parted -s "$DEV" unit s print >/tmp/udm-sata-volume.gpt 2>/dev/null || \
+        die "cannot read GPT on $DEV"
+    grep -q 'boot' /tmp/udm-sata-volume.gpt || die "GPT missing boot (sda1)"
+    grep -q 'overlay' /tmp/udm-sata-volume.gpt || die "GPT missing overlay (sda6)"
+}
+
+cmd_status() {
+    require_os_gpt
+    echo "=== GPT ==="
+    parted -s "$DEV" unit s print
+    echo "=== usd ==="
+    systemctl is-enabled usd.service usdbd.service 2>/dev/null || true
+    systemctl is-active usd.service usdbd.service 2>/dev/null || true
+    pd=$(part_path)
+    echo "=== volume ==="
+    if [ -n "$pd" ]; then
+        blkid "$pd" 2>/dev/null || true
+        if mountpoint -q "$MNT" 2>/dev/null; then
+            df -h "$MNT"
+        else
+            echo "$MNT not mounted"
+        fi
+    else
+        echo "no $LABEL partition"
+    fi
+    echo "=== /srv ==="
+    ls -ld /srv "$MNT" "$SRV_TARGET" 2>/dev/null || true
+    readlink /srv 2>/dev/null || true
+}
+
+link_srv() {
+    mkdir -p "$SRV_TARGET"
+    if [ -L /srv ]; then
+        ln -sfn "$SRV_TARGET" /srv
+        return 0
+    fi
+    if [ -d /srv ]; then
+        if [ -z "$(ls -A /srv 2>/dev/null || true)" ]; then
+            rmdir /srv
+            ln -sfn "$SRV_TARGET" /srv
+        else
+            log "/srv is not empty; leaving it (expected $SRV_TARGET)"
+        fi
+        return 0
+    fi
+    if [ -e /srv ]; then
+        die "/srv exists and is not a directory or symlink"
+    fi
+    ln -sfn "$SRV_TARGET" /srv
+}
+
+cmd_mount() {
+    pd=$(part_path)
+    [ -n "$pd" ] || die "no $LABEL partition (run: udm-sata-volume setup)"
+    mkdir -p "$MNT"
+    if ! mountpoint -q "$MNT" 2>/dev/null; then
+        mount -t ext4 -o defaults,nofail "$pd" "$MNT" || \
+            die "mount $pd -> $MNT failed"
+    fi
+    link_srv
+    log "mounted $pd on $MNT; /srv -> $SRV_TARGET"
+}
+
+create_part() {
+    relocate_backup_gpt
+    start=$(volume_start_after_os)
+    disk_end=$(disk_sectors)
+    [ "$disk_end" -gt "$start" ] || die "no free space after OS GPT (disk=$(gib "$disk_end") GiB)"
+    free=$((disk_end - start))
+    [ "$free" -ge "$MIN_SECTS" ] || die "free space too small (${free}s / $(gib "$free") GiB); need >= 1 GiB after OS"
+
+    log "disk $(gib "$disk_end") GiB; volume1 from sector $start to end of disk ($(gib "$free") GiB leftover)"
+
+    if command -v sgdisk >/dev/null 2>&1; then
+        # :0 = last usable GPT sector (rest of this disk, any size)
+        sgdisk -n "${PART}:${start}:0" -c "${PART}:${LABEL}" -t "${PART}:8300" "$DEV"
+    else
+        parted -s "$DEV" mkpart "$LABEL" "${start}s" 100%
+        parted -s "$DEV" name "$PART" "$LABEL"
+    fi
+    refresh_pt
+    wait_part_node || die "partition $PART did not appear"
+}
+
+# Extend sda7 to 100% if the disk grew (swap 512 G → 2 T) or GPT backup was stale.
+grow_part() {
+    relocate_backup_gpt
+    refresh_pt
+    start=$(part_n_start "$PART")
+    end=$(part_n_end "$PART")
+    disk_end=$(disk_sectors)
+    [ -n "$start" ] && [ -n "$end" ] && [ "$disk_end" -gt 0 ] || \
+        die "cannot read partition $PART / disk size"
+    slack=4096
+    leftover=$((disk_end - end))
+    if [ "$leftover" -le "$slack" ]; then
+        log "volume1 already fills the disk ($(gib $((end - start + 1))) GiB of $(gib "$disk_end") GiB)"
+        return 0
+    fi
+    log "growing volume1 to end of disk (now ends $end, disk $(gib "$disk_end") GiB, +$(gib "$leftover") GiB)"
+    if ! parted -s "$DEV" resizepart "$PART" 100%; then
+        if mountpoint -q "$MNT" 2>/dev/null; then
+            die "parted resizepart failed while $MNT is mounted"
+        fi
+        sgdisk -d "$PART" "$DEV"
+        sgdisk -n "${PART}:${start}:0" -c "${PART}:${LABEL}" -t "${PART}:8300" "$DEV"
+    fi
+    refresh_pt
+    pd=$(part_path)
+    [ -n "$pd" ] || die "partition $PART missing after grow"
+    fs=$(blkid -o value -s TYPE "$pd" 2>/dev/null || true)
+    if [ "$fs" = "ext4" ]; then
+        resize2fs "$pd"
+    fi
+}
+
+cmd_setup() {
+    require_os_gpt
+    if usd_running; then
+        die "usd/usdbd is active; refuse to change GPT. Keep them masked."
+    fi
+
+    pd=$(part_path)
+    if [ -z "$pd" ]; then
+        log "creating partition $PART ($LABEL) using the rest of the disk"
+        create_part
+        pd=$(part_path)
+        [ -n "$pd" ] || die "partition $PART did not appear"
+    else
+        log "partition $LABEL already exists: $pd"
+        grow_part
+        pd=$(part_path)
+    fi
+
+    fs=$(blkid -o value -s TYPE "$pd" 2>/dev/null || true)
+    if [ "$fs" = "ext4" ]; then
+        log "$pd already ext4; skipping mkfs"
+    elif [ -n "$fs" ]; then
+        die "$pd already has filesystem '$fs'; not formatting"
+    else
+        log "formatting $pd ext4 ($(gib "$(disk_sectors)") GiB disk)"
+        mkfs.ext4 -F -L "$LABEL" -E lazy_itable_init=1,lazy_journal_init=1 "$pd"
+    fi
+
+    cmd_mount
+    cmd_status
+}
+
+usage() {
+    echo "usage: udm-sata-volume setup|mount|status" >&2
+    echo "  setup  add or grow GPT partition $PART to the rest of the disk, mkfs, mount $MNT" >&2
+    echo "  mount  mount $MNT and point /srv at $SRV_TARGET (every boot)" >&2
+    echo "  status show GPT, mount, usd" >&2
+    exit 1
+}
+
+case "${1:-}" in
+    setup) cmd_setup ;;
+    mount) cmd_mount ;;
+    status) cmd_status ;;
+    *) usage ;;
+esac

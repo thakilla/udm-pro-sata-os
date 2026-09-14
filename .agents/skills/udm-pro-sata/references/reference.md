@@ -13,6 +13,7 @@ Protect-bay disk = `/dev/sda`. Web UI on **LAN 1–8**, `https://192.168.1.1` (n
 | sda4 | 1 GiB | log | `/var/log` |
 | sda5 | 2 GiB | persistent | `/persistent` (tools survive overlay wipe) |
 | sda6 | 9.5 GiB | overlay | overlayfs upper |
+| sda7 | rest of disk | volume1 | optional `/volume1` (any HDD size after the ~15 GiB OS GPT); **usd stays masked**. `udm-sata-volume setup` |
 
 ## SPI U-Boot env (mtd1 + mtd2)
 

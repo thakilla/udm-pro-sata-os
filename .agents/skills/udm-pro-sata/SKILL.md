@@ -26,8 +26,8 @@ Do **not**:
 - Leave Control Plane automatic updates on (the unit bricks itself)
 - `fwupdate`, `ubnt-systool fwupdate`, `udm-sata-update`
 - `usb start` in U-Boot (XHCI crash)
-- Unmask `usd` / `usdbd` or put Protect on this HDD
-- Expand the OS GPT to the full 1 TB
+- Unmask `usd` / `usdbd` (that daemon repartitions the whole HDD)
+- Expand OS partitions sda1–6 to fill the whole disk
 - Remove the HDD
 - `env default -a` in U-Boot
 - Flash a `.bin` that is not `UBNTUDMPRO.al324` or that lacks `udmpro@2`

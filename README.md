@@ -17,7 +17,7 @@ Tested: **UDM Pro** (not SE / Pro Max / base UDM), BOM rev 10, `fit_index=2`, Un
 - This **voids the warranty**.
 - The Protect bay disk is wiped.
 - A wrong `bootcmd` or `usb start` in U-Boot can leave the unit unbootable.
-- Protect must **not** run on the same disk (`usd` destroys the OS GPT).
+- Protect must **not** be handed the whole disk via `usd` (`usd` destroys the OS GPT). Leftover space as `sda7` → `/volume1` with `usd` still masked is how extra apps use the rest of the disk (`udm-sata-volume setup`).
 - This is not an official Ubiquiti method. Firmware `.bin` files belong to Ubiquiti; this repo only contains scripts.
 
 Related hardware approach (desolder GL3224, USB stick on the internal bus):  
@@ -44,8 +44,8 @@ The **first** conversion needs serial (best run by an agent that can drive that 
 | Control Plane auto-updates | Same path as a manual UI update. The unit will brick itself on the next scheduled firmware. |
 | Factory reset | Restores the USB `bootcmd`. |
 | **`usb start`** in U-Boot | XHCI Event-33 crash on affected boards. |
-| Expand GPT to the full 1 TB | `usd`/Protect would consume the rest of the disk. |
-| Protect on the OS disk | UI storage daemon repartitions the HDD. |
+| Expand OS partitions to fill the disk | `usd` would treat the disk as its volume and wipe GPT. Leftover **after** sda6 is `udm-sata-volume`. |
+| Unmask `usd` / `usdbd` | UI storage daemon repartitions the HDD. |
 | Remove the HDD | No disk means no OS. |
 | `env default -a` | Wipes SCSI boot. |
 
@@ -65,7 +65,7 @@ This setup:
 SPI 8 MiB → scsi init → HDD sda1 /uImage (FIT #udmpro@N) → sda3 /rootfs (squashfs)
 ```
 
-GPT on the HDD (**do not grow it**):
+GPT on the HDD (**do not grow sda1–6**):
 
 | Part | Size | Label | Contents |
 |---|---|---|---|
@@ -75,6 +75,7 @@ GPT on the HDD (**do not grow it**):
 | sda4 | 1 GiB | log | `/var/log` |
 | sda5 | 2 GiB | persistent | `/persistent` (scripts survive overlay wipe) |
 | sda6 | 9.5 GiB | overlay | overlayfs |
+| sda7 | rest of disk | volume1 | optional `/volume1` (`udm-sata-volume`; usd stays masked) |
 
 `/dev/disk/by-partlabel/*` already points at `sda*`. Initramfs mounts by partlabel — the disk does **not** need to be named `/dev/boot`.
 
@@ -375,6 +376,23 @@ After overlay wipe: setup wizard, enable SSH, then the same `install.sh`.
 
 ---
 
+## Optional: leftover disk as `/volume1`
+
+`format-os-disk.sh` only creates sda1–6 (~15 GiB). The rest of the drive (512 GB, 1 TB, 8 TB, …) is for extra apps: **Protect, Talk, Access**, and the other UniFi OS applications that store data under `/srv`. Network (the controller) stays on `/data` and does not need this partition.
+
+To use that leftover **without unmasking `usd`**:
+
+```sh
+sh /persistent/udm-sata/bin/install.sh /persistent/udm-sata/bin
+udm-sata-volume setup
+```
+
+That adds **sda7** (`volume1`) from the first free sector after overlay to **the end of this disk**, formats ext4, mounts `/volume1`, and points `/srv` at `/volume1/.srv`. Protect recordings go to `/srv/unifi-protect/video` on that volume. Run `setup` again after swapping in a larger drive: it grows sda7 and `resize2fs`. The guard remounts it after overlay wipe. `usd` / `usdbd` stay masked.
+
+Those apps **do run** with this layout. Storage Budgeting in the UI may still say **No Drives Found**: that screen talks to `usd`/`ustated`, not to the `/volume1` mount. Recordings still land on the leftover partition. Do **not** unmask `usd` to “fix” the empty drive list — it will wipe GPT.
+
+---
+
 ## Scripts
 
 Agent skill for a later firmware update (SSH, no serial): `.agents/skills/udm-pro-sata/`. First conversion: this README + `AGENTS.md`.
@@ -386,7 +404,8 @@ Agent skill for a later firmware update (SSH, no serial): `.agents/skills/udm-pr
 | `format-os-disk.sh` | Stock GPT on `/dev/sda` (wipes the disk) |
 | `udm-sata-apply-bin` | `.bin` → `sda1`/`sda3`, env, optional overlay wipe |
 | `udm-sata-env` | Read SPI env / restore SCSI |
-| `udm-sata-guard` | Mask usd, hide USB eMMC, restore tools from `/persistent` |
+| `udm-sata-guard` | Mask usd, hide USB eMMC, restore tools, remount `/volume1` |
+| `udm-sata-volume` | Leftover GPT `sda7` → `/volume1` + `/srv` (usd stays masked) |
 | `install.sh` | Guard + env on a running box |
 
 Env format: redundant U-Boot, CRC32 over payload only (not the flags byte), `ENV_SIZE=0x4000`. `flashcp` has no `-q`.

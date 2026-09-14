@@ -13,9 +13,11 @@ install -d /usr/lib/ubnt/hooks/system/bootup-top /usr/lib/ubnt/hooks/system/upgr
 install -m 755 "$HERE/udm-sata-env" /usr/local/sbin/udm-sata-env
 install -m 755 "$HERE/udm-sata-guard" /usr/local/sbin/udm-sata-guard
 install -m 755 "$HERE/udm-sata-apply-bin" /usr/local/sbin/udm-sata-apply-bin
+install -m 755 "$HERE/udm-sata-volume" /usr/local/sbin/udm-sata-volume
 install -m 644 "$HERE/ubnt_bin.py" /usr/local/sbin/ubnt_bin.py
 install -m 755 "$HERE/udm-sata-restore-env" /lib/systemd/system-shutdown/udm-sata-restore-env
 install -m 644 "$HERE/udm-sata-guard.service" /etc/systemd/system/udm-sata-guard.service
+install -m 644 "$HERE/udm-sata-volume.service" /etc/systemd/system/udm-sata-volume.service
 install -m 755 "$HERE/udm-sata.hook" /usr/lib/ubnt/hooks/system/bootup-top/05-udm-sata
 install -m 755 "$HERE/udm-sata.hook" /usr/lib/ubnt/hooks/system/upgrade-bottom/90-udm-sata
 
@@ -29,17 +31,25 @@ fi
 chmod 755 /persistent/udm-sata/bin/udm-sata-env \
     /persistent/udm-sata/bin/udm-sata-guard \
     /persistent/udm-sata/bin/udm-sata-apply-bin \
+    /persistent/udm-sata/bin/udm-sata-volume \
     /persistent/udm-sata/bin/udm-sata-restore-env \
     /persistent/udm-sata/bin/udm-sata.hook \
     /persistent/udm-sata/bin/install.sh \
     /persistent/udm-sata/bin/format-os-disk.sh \
     /persistent/udm-sata/bin/inspect-bin.py || true
 chmod 644 /persistent/udm-sata/bin/udm-sata-guard.service \
+    /persistent/udm-sata/bin/udm-sata-volume.service \
     /persistent/udm-sata/bin/ubnt_bin.py
 
 systemctl daemon-reload
 systemctl enable udm-sata-guard.service
+systemctl enable udm-sata-volume.service
 /usr/local/sbin/udm-sata-guard
+if [ -b /dev/disk/by-partlabel/volume1 ]; then
+    /usr/local/sbin/udm-sata-volume mount || true
+    systemctl start udm-sata-volume.service || true
+fi
 /usr/local/sbin/udm-sata-env restore
 /usr/local/sbin/udm-sata-env show
 echo "installed. later updates:  udm-sata-apply-bin /path/to/UDMPRO-x.y.z.bin"
+echo "leftover HDD as /volume1 (usd stays masked):  udm-sata-volume setup"
