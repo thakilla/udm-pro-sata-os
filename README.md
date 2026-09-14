@@ -17,7 +17,7 @@ Tested: **UDM Pro** (not SE / Pro Max / base UDM), BOM rev 10, `fit_index=2`, Un
 - This **voids the warranty**.
 - The Protect bay disk is wiped.
 - A wrong `bootcmd` or `usb start` in U-Boot can leave the unit unbootable.
-- Protect must **not** be handed the whole disk via `usd` (`usd` destroys the OS GPT). Leftover space as `sda7` → `/volume1` with `usd` still masked is how extra apps use the rest of the disk (`udm-sata-volume setup`).
+- Protect must **not** be handed the whole disk via `usd` (`usd` destroys the OS GPT). App data (Protect, Talk, Access, …) lives on **sda7** → `/volume1` with `usd` still masked (`udm-sata-volume setup`, run by `install.sh`).
 - This is not an official Ubiquiti method. Firmware `.bin` files belong to Ubiquiti; this repo only contains scripts.
 
 Related hardware approach (desolder GL3224, USB stick on the internal bus):  
@@ -44,7 +44,7 @@ The **first** conversion needs serial (best run by an agent that can drive that 
 | Control Plane **UniFi OS** auto-updates | Same path as a manual OS update. The unit will brick itself on the next scheduled firmware. Application auto-updates can stay on. |
 | Factory reset | Restores the USB `bootcmd`. |
 | **`usb start`** in U-Boot | XHCI Event-33 crash on affected boards. |
-| Expand OS partitions to fill the disk | `usd` would treat the disk as its volume and wipe GPT. Leftover **after** sda6 is `udm-sata-volume`. |
+| Expand OS partitions to fill the disk | `usd` would treat the disk as its volume and wipe GPT. Rest of the disk is **sda7** (`udm-sata-volume`). |
 | Unmask `usd` / `usdbd` | UI storage daemon repartitions the HDD. |
 | Remove the HDD | No disk means no OS. |
 | `env default -a` | Wipes SCSI boot. |
@@ -65,17 +65,17 @@ This setup:
 SPI 8 MiB → scsi init → HDD sda1 /uImage (FIT #udmpro@N) → sda3 /rootfs (squashfs)
 ```
 
-GPT on the HDD (**do not grow sda1–6**):
+GPT on the HDD (**do not grow sda1–6**). sda7 is the rest of whatever disk is in the bay:
 
 | Part | Size | Label | Contents |
 |---|---|---|---|
 | sda1 | 64 MiB | boot | `uImage` file (FIT) |
-| sda2 | 32 MiB | recovery | raw / optional |
+| sda2 | 32 MiB | recovery | raw / unused by SCSI bootcmd |
 | sda3 | 2 GiB | root | `rootfs` file (squashfs, **4K padding**) |
 | sda4 | 1 GiB | log | `/var/log` |
 | sda5 | 2 GiB | persistent | `/persistent` (scripts survive overlay wipe) |
 | sda6 | 9.5 GiB | overlay | overlayfs |
-| sda7 | rest of disk | volume1 | optional `/volume1` (`udm-sata-volume`; usd stays masked) |
+| sda7 | rest of disk | volume1 | `/volume1` + `/srv` for Protect, Talk, Access, … (`usd` stays masked) |
 
 `/dev/disk/by-partlabel/*` already points at `sda*`. Initramfs mounts by partlabel — the disk does **not** need to be named `/dev/boot`.
 
@@ -234,7 +234,7 @@ Minimal shell path after `inspect-bin.py` prints offsets — Debian initramfs/Bu
 
 1. `dd` the FIT out of the `.bin` (offsets from `inspect-bin.py`) onto `sda1` as `/uImage`.
 2. Same for squashfs onto `sda3:/rootfs`, **pad to 4096 bytes**.
-3. `sda4`–`sda6` empty ext4 is enough for first boot.
+3. `sda4`–`sda6` empty ext4 is enough for first boot. `sda7` exists as GPT (rest of the disk); `install.sh` formats and mounts it.
 
 Example (offsets **differ per .bin**; always use `inspect-bin.py`):
 
@@ -314,6 +314,7 @@ tar -C /tmp -xzf /tmp/sata-tools.tgz
 # or: mkdir -p /tmp/sata-tools && tar -C /tmp/sata-tools -xzf /tmp/sata-tools.tgz
 sh /tmp/sata-tools/install.sh /tmp/sata-tools
 udm-sata-env check    # scsi
+udm-sata-volume status
 ```
 
 This:
@@ -322,6 +323,9 @@ This:
 - masks `usd.service` / `usdbd.service`
 - installs the early-boot guard (hide USB eMMC, `/dev/boot` → `sda`)
 - copies tools to `/persistent/udm-sata/bin/`
+- formats **sda7** (rest of the disk) as `/volume1`, mounts it, points `/srv` at `/volume1/.srv`
+
+Protect, Talk, Access, and other apps that store data under `/srv` use that volume. Network (the controller) stays on `/data`. Storage Budgeting in the UI may still say **No Drives Found** (`ustated` needs `usd`). Recordings still go to `/srv/unifi-protect/video` on sda7. Do **not** unmask `usd` to “fix” the empty drive list — it will wipe GPT. After swapping in a larger drive, run `udm-sata-volume setup` again (grows sda7 + `resize2fs`).
 
 Web UI: LAN `https://192.168.1.1`. After an overlay wipe this is a fresh setup.
 
@@ -370,28 +374,12 @@ A new squashfs drops `/usr/local/sbin` even with `--keep-overlay`. After **every
 sh /persistent/udm-sata/bin/install.sh /persistent/udm-sata/bin
 systemctl start udm-sata-guard.service
 udm-sata-env check
+udm-sata-volume status
 ```
 
 After overlay wipe: setup wizard, enable SSH, then the same `install.sh`.
 
 `/persistent` is ~2 GiB. A ~900 MiB `.bin` fits; a full `sda3` backup often does not.
-
----
-
-## Optional: leftover disk as `/volume1`
-
-`format-os-disk.sh` only creates sda1–6 (~15 GiB). The rest of the drive (512 GB, 1 TB, 8 TB, …) is for extra apps: **Protect, Talk, Access**, and the other UniFi OS applications that store data under `/srv`. Network (the controller) stays on `/data` and does not need this partition.
-
-To use that leftover **without unmasking `usd`**:
-
-```sh
-sh /persistent/udm-sata/bin/install.sh /persistent/udm-sata/bin
-udm-sata-volume setup
-```
-
-That adds **sda7** (`volume1`) from the first free sector after overlay to **the end of this disk**, formats ext4, mounts `/volume1`, and points `/srv` at `/volume1/.srv`. Protect recordings go to `/srv/unifi-protect/video` on that volume. Run `setup` again after swapping in a larger drive: it grows sda7 and `resize2fs`. The guard remounts it after overlay wipe. `usd` / `usdbd` stay masked.
-
-Those apps **do run** with this layout. Storage Budgeting in the UI may still say **No Drives Found**: that screen talks to `usd`/`ustated`, not to the `/volume1` mount. Recordings still land on the leftover partition. Do **not** unmask `usd` to “fix” the empty drive list — it will wipe GPT.
 
 ---
 
@@ -403,12 +391,12 @@ Agent skill for a later firmware update (SSH, no serial): `.agents/skills/udm-pr
 |---|---|
 | `inspect-bin.py` / `ubnt_bin.py` | Find FIT + squashfs in a `.bin` (computer) |
 | `tftp-server.py` | TFTP RRQ helper: `:69` (sudo) + optional `:6969` |
-| `format-os-disk.sh` | Stock GPT on `/dev/sda` (wipes the disk) |
+| `format-os-disk.sh` | GPT sda1–6 (OS) + sda7 (rest of disk); wipes the drive |
 | `udm-sata-apply-bin` | `.bin` → `sda1`/`sda3`, env, optional overlay wipe |
 | `udm-sata-env` | Read SPI env / restore SCSI |
 | `udm-sata-guard` | Mask usd, hide USB eMMC, restore tools, remount `/volume1` |
-| `udm-sata-volume` | Leftover GPT `sda7` → `/volume1` + `/srv` (usd stays masked) |
-| `install.sh` | Guard + env on a running box |
+| `udm-sata-volume` | Format/mount sda7 as `/volume1` + `/srv` (usd stays masked) |
+| `install.sh` | Guard + env + `/volume1` on a running box |
 
 Env format: redundant U-Boot, CRC32 over payload only (not the flags byte), `ENV_SIZE=0x4000`. `flashcp` has no `-q`.
 

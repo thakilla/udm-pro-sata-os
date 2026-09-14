@@ -3,7 +3,7 @@
 Board: `alpine_v2_ubnt udm pro v6.0`, BOM rev 10, sysid `ea15`, `fit_index=2`.
 Protect-bay disk = `/dev/sda`. Web UI on **LAN 1–8**, `https://192.168.1.1` (not WAN).
 
-## GPT (do not grow)
+## GPT (do not grow sda1–6)
 
 | Part | Size | Label | Role |
 |---|---|---|---|
@@ -13,7 +13,7 @@ Protect-bay disk = `/dev/sda`. Web UI on **LAN 1–8**, `https://192.168.1.1` (n
 | sda4 | 1 GiB | log | `/var/log` |
 | sda5 | 2 GiB | persistent | `/persistent` (tools survive overlay wipe) |
 | sda6 | 9.5 GiB | overlay | overlayfs upper |
-| sda7 | rest of disk | volume1 | optional `/volume1` (any HDD size after the ~15 GiB OS GPT); **usd stays masked**. `udm-sata-volume setup` |
+| sda7 | rest of disk | volume1 | `/volume1` + `/srv` for Protect/Talk/Access; **usd stays masked**. `install.sh` runs `udm-sata-volume setup` |
 
 ## SPI U-Boot env (mtd1 + mtd2)
 
@@ -44,7 +44,7 @@ Historical 5.1.26 only (do not reuse): FIT `1499296`/`14574646`, squashfs `16074
 
 Squashfs must be padded to 4 KiB or loop-mount returns `EINVAL`.
 
-After every apply (keep-overlay included): `/usr/local/sbin` is gone. Re-run `sh /persistent/udm-sata/bin/install.sh /persistent/udm-sata/bin`. The guard unit must `ExecStart` `/persistent/udm-sata/bin/udm-sata-guard` and run `After=local-fs.target` so persistent is mounted.
+After every apply (keep-overlay included): `/usr/local/sbin` is gone. Re-run `sh /persistent/udm-sata/bin/install.sh /persistent/udm-sata/bin` (that also remounts `/volume1`). The guard unit must `ExecStart` `/persistent/udm-sata/bin/udm-sata-guard` and run `After=local-fs.target` so persistent is mounted.
 
 ## Unbrick squashfs (rdinit)
 

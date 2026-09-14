@@ -45,11 +45,8 @@ systemctl daemon-reload
 systemctl enable udm-sata-guard.service
 systemctl enable udm-sata-volume.service
 /usr/local/sbin/udm-sata-guard
-if [ -b /dev/disk/by-partlabel/volume1 ]; then
-    /usr/local/sbin/udm-sata-volume mount || true
-    systemctl start udm-sata-volume.service || true
-fi
+/usr/local/sbin/udm-sata-volume setup
+systemctl start udm-sata-volume.service || true
 /usr/local/sbin/udm-sata-env restore
 /usr/local/sbin/udm-sata-env show
-echo "installed. later updates:  udm-sata-apply-bin /path/to/UDMPRO-x.y.z.bin"
-echo "leftover HDD as /volume1 (usd stays masked):  udm-sata-volume setup"
+echo "installed. later UniFi OS:  udm-sata-apply-bin /path/to/UDMPRO-x.y.z.bin"

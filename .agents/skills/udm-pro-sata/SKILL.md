@@ -38,7 +38,8 @@ Always:
 
 - Keep SPI `bootcmd` SCSI and `bootargs` with `systemd.mask=usd.service systemd.mask=usdbd.service`
 - Pad `/rootfs` on `sda3` to a **4 KiB** multiple
-- After **every** `apply-bin` reboot (including `--keep-overlay`), run `install.sh` from `/persistent`
+- After **every** `apply-bin` reboot (including `--keep-overlay`), run `install.sh` from `/persistent` (restores tools, remounts `/volume1`)
+- Keep **sda7** `/volume1` mounted with `/srv` → `/volume1/.srv`; `usd` stays masked
 
 ## Firmware update (SSH only)
 
@@ -51,8 +52,8 @@ Always:
    Same major (e.g. 5.1.26 → 5.1.33): `--keep-overlay` (keeps UI account). Major jump: default wipe.
 6. Wait for ping + SSH (`reboot -f` takes a few minutes).
 7. **Always** `sh /persistent/udm-sata/bin/install.sh /persistent/udm-sata/bin`.
-   A new squashfs drops `/usr/local/sbin` even when the overlay is kept. `install.sh` restores PATH tools and the guard.
-8. Verify: `/etc/version` (or `/usr/lib/version`), `udm-sata-env check` / `show` (`scsi`, `fit_index=2`, usd masked), `systemctl start` + `is-active udm-sata-guard`, `/dev/boot` → `sda`, LAN UI `https://192.168.1.1`. Remind: **UniFi OS** auto-update stays **off**. Application updates (Network, Protect, …) from the UI are allowed.
+   A new squashfs drops `/usr/local/sbin` even when the overlay is kept. `install.sh` restores PATH tools, the guard, and `/volume1`.
+8. Verify: `/etc/version` (or `/usr/lib/version`), `udm-sata-env check` / `show` (`scsi`, `fit_index=2`, usd masked), `systemctl start` + `is-active udm-sata-guard`, `/dev/boot` → `sda`, `udm-sata-volume status` (`/volume1` mounted, `/srv` → `/volume1/.srv`), LAN UI `https://192.168.1.1`. Remind: **UniFi OS** auto-update stays **off**. Application updates (Network, Protect, …) from the UI are allowed.
 
 Do not run `inspect-bin.py` on the UDM as a required step — `apply-bin` already inspects.
 

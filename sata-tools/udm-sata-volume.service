@@ -1,5 +1,5 @@
 [Unit]
-Description=Mount leftover HDD space as /volume1 (Protect/Talk/Access)
+Description=Mount sda7 as /volume1 for Protect/Talk/Access
 After=local-fs.target udm-sata-guard.service
 Requires=udm-sata-guard.service
 ConditionPathExists=/dev/disk/by-partlabel/volume1
