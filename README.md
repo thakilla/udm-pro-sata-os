@@ -32,7 +32,7 @@ Related hardware approach (desolder GL3224, USB stick on the internal bus):
 - A **disposable** SATA HDD/SSD fits the Protect bay (2.5″/3.5″ depending on the cage).
 - The latest **`UDMPRO-*.bin`** from [ui.com/download/software/udm-pro](https://ui.com/download/software/udm-pro) (platform `al324`, not SE). No extra dumps.
 
-The **first** conversion needs serial (best run by an agent that can drive that console). Once the SCSI `bootcmd` is stored in SPI, leave the console disconnected: later OS updates are SSH-only via the skill / `udm-sata-apply-bin`. Never the Web UI or `fwupdate`. Turn **off every automatic update under Control Plane** or the box will apply an official update and brick itself again.
+The **first** conversion needs serial (best run by an agent that can drive that console). Once the SCSI `bootcmd` is stored in SPI, leave the console disconnected: later **UniFi OS** updates are SSH-only via the skill / `udm-sata-apply-bin`. Never the Web UI or `fwupdate` for the OS. Turn **off UniFi OS / firmware auto-updates** under Control Plane. Network, Protect, Talk, Access, and other applications can keep UI updates (manual or scheduled).
 
 ---
 
@@ -40,8 +40,8 @@ The **first** conversion needs serial (best run by an agent that can drive that 
 
 | Action | Why |
 |---|---|
-| Web UI “Update” / `fwupdate` / `ubnt-systool fwupdate` | Writes the dead eMMC (`/dev/boot` or `/dev/sdb2`). |
-| Control Plane auto-updates | Same path as a manual UI update. The unit will brick itself on the next scheduled firmware. |
+| Web UI UniFi OS “Update” / `fwupdate` / `ubnt-systool fwupdate` | Writes the dead eMMC (`/dev/boot` or `/dev/sdb2`). App updates (Network, Protect, …) in the UI are fine. |
+| Control Plane **UniFi OS** auto-updates | Same path as a manual OS update. The unit will brick itself on the next scheduled firmware. Application auto-updates can stay on. |
 | Factory reset | Restores the USB `bootcmd`. |
 | **`usb start`** in U-Boot | XHCI Event-33 crash on affected boards. |
 | Expand OS partitions to fill the disk | `usd` would treat the disk as its volume and wipe GPT. Leftover **after** sda6 is `udm-sata-volume`. |
@@ -325,7 +325,7 @@ This:
 
 Web UI: LAN `https://192.168.1.1`. After an overlay wipe this is a fresh setup.
 
-Immediately after the wizard: **Settings → Control Plane** and disable **all automatic updates** (UniFi OS and every application). If they stay on, the device will pull an official `.bin` and write the dead eMMC.
+Immediately after the wizard: **Settings → Control Plane** and disable **UniFi OS / firmware automatic updates**. Application updates (Network, Protect, Talk, Access, …) can stay enabled or be applied from the UI; they use `uos`, not `fwupdate`. If OS auto-update stays on, the device will pull an official `.bin` and write the dead eMMC.
 
 ---
 
@@ -337,12 +337,14 @@ Apply later `UDMPRO-*.bin` files **over SSH** with `udm-sata-apply-bin`.
 
 Do **not** use:
 
-- the Web UI **Update** button
+- the Web UI **Update** button for **UniFi OS / firmware**
 - `fwupdate`
 - `ubnt-systool fwupdate`
-- **Control Plane** automatic updates (UniFi OS or applications)
+- **Control Plane** automatic updates for **UniFi OS**
 
-Those always write the dead USB eMMC (`/dev/boot` / `/dev/sdb2`), not SATA. The update will fail or brick the next boot. After every setup wizard, go to **Settings → Control Plane** and turn every auto-update **off**. Leave them on and the unit will destroy the SATA boot on its own.
+Those write the dead USB eMMC (`/dev/boot` / `/dev/sdb2`), not SATA. The OS update will fail or brick the next boot. After every setup wizard, turn **UniFi OS auto-update off**. Leave it on and the unit will destroy the SATA boot on its own.
+
+Network, Protect, Talk, Access, and the other applications **can** be updated from the UI (or left on a schedule). They install via `uos`/apt and do not use `fwupdate`.
 
 ```sh
 # computer: check offsets

@@ -22,8 +22,8 @@ Read [references/reference.md](references/reference.md) for GPT, SPI env, and un
 
 Do **not**:
 
-- Web-UI firmware update or factory reset
-- Leave Control Plane automatic updates on (the unit bricks itself)
+- Web-UI **UniFi OS / firmware** update or factory reset
+- Leave Control Plane **UniFi OS** automatic updates on (the unit bricks itself)
 - `fwupdate`, `ubnt-systool fwupdate`, `udm-sata-update`
 - `usb start` in U-Boot (XHCI crash)
 - Unmask `usd` / `usdbd` (that daemon repartitions the whole HDD)
@@ -52,7 +52,7 @@ Always:
 6. Wait for ping + SSH (`reboot -f` takes a few minutes).
 7. **Always** `sh /persistent/udm-sata/bin/install.sh /persistent/udm-sata/bin`.
    A new squashfs drops `/usr/local/sbin` even when the overlay is kept. `install.sh` restores PATH tools and the guard.
-8. Verify: `/etc/version` (or `/usr/lib/version`), `udm-sata-env check` / `show` (`scsi`, `fit_index=2`, usd masked), `systemctl start` + `is-active udm-sata-guard`, `/dev/boot` → `sda`, LAN UI `https://192.168.1.1`. Remind: Control Plane auto-updates stay **off**.
+8. Verify: `/etc/version` (or `/usr/lib/version`), `udm-sata-env check` / `show` (`scsi`, `fit_index=2`, usd masked), `systemctl start` + `is-active udm-sata-guard`, `/dev/boot` → `sda`, LAN UI `https://192.168.1.1`. Remind: **UniFi OS** auto-update stays **off**. Application updates (Network, Protect, …) from the UI are allowed.
 
 Do not run `inspect-bin.py` on the UDM as a required step — `apply-bin` already inspects.
 
